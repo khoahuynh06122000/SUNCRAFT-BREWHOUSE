@@ -405,10 +405,26 @@ export default function App() {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
-      console.error("Login failed:", error);
-      // Don't show alert for manual cancellations or multiple request errors
-      if (error?.code !== 'auth/cancelled-popup-request' && error?.code !== 'auth/popup-closed-by-user') {
-        alert("Đăng nhập thất bại. Vui lòng thử lại.");
+      console.error("Login detail:", error);
+      const errorCode = error?.code || "";
+      const errorMessage = error?.message || "";
+      
+      // Kiểm tra các lỗi người dùng chủ động đóng hoặc hủy
+      if (errorCode === 'auth/popup-closed-by-user' || errorCode === 'auth/cancelled-popup-request') {
+        return;
+      }
+      
+      // Kiểm tra lỗi tên miền chưa được cấp phép
+      if (errorCode === 'auth/unauthorized-domain' || errorMessage.includes('unauthorized-domain')) {
+        alert(
+          "LỖI PHÂN QUYỀN: Tên miền này chưa được cấp phép trong Firebase.\n\n" +
+          "Anh hãy làm theo bước này nhé:\n" +
+          "1. Copy tên miền này: banabrewhouse.vercel.app\n" +
+          "2. Vào Firebase Console -> Authentication -> Settings.\n" +
+          "3. Thêm nó vào mục 'Authorized domains' là xong ạ!"
+        );
+      } else {
+        alert(`Đăng nhập thất bại. Vui lòng thử lại. (Mã lỗi: ${errorCode || 'Unknown'})`);
       }
     } finally {
       setIsAuthenticating(false);
