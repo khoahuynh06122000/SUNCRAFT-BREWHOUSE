@@ -83,6 +83,7 @@ import {
   isWithinInterval,
   parseISO,
   format,
+  differenceInDays,
   addDays,
   subDays,
   addWeeks,
@@ -394,6 +395,8 @@ export default function App() {
   const [revenueData, setRevenueData] = useState<RevenueRecord[]>([]);
   const [expandedInvoices, setExpandedInvoices] = useState<string[]>([]);
   const [revenuePartnerSearch, setRevenuePartnerSearch] = useState('');
+  const [galleryMonth, setGalleryMonth] = useState<string>('all');
+  const [gallerySearchQuery, setGallerySearchQuery] = useState<string>('');
 
   const [products] = useState<Product[]>(INITIAL_PRODUCTS);
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
@@ -1348,6 +1351,64 @@ export default function App() {
     return filteredTransactionsByTime.filter(t => t.batchNumber?.toLowerCase().includes(bq));
   }, [filteredTransactionsByTime, batchSearchQuery]);
 
+  // Filter for Gallery
+  const galleryMonthOptions = useMemo(() => {
+    const dates = transactions
+      .filter(t => t.evidencePhotoUrl)
+      .map(t => startOfMonth(parseISO(t.date)));
+    
+    const monthStrings = dates.map(d => format(d, 'yyyy-MM'));
+    const uniqueMonths = ([...new Set(monthStrings)] as string[])
+      .sort((a, b) => b.localeCompare(a)); // Newest first
+
+    return [
+      { value: 'all', label: 'Tất cả các tháng' },
+      ...uniqueMonths.map((m: string) => {
+        try {
+          return {
+            value: m,
+            label: `Tháng ${format(parse(m, 'yyyy-MM', new Date()), 'MM/yyyy')}`
+          };
+        } catch (e) {
+          return { value: m, label: `Tháng ${m}` };
+        }
+      })
+    ];
+  }, [transactions]);
+
+  const filteredGalleryTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      if (t.type !== galleryFilter || !t.evidencePhotoUrl) return false;
+      
+      if (galleryMonth !== 'all') {
+        try {
+          const tDate = parseISO(t.date);
+          const monthStr = format(tDate, 'yyyy-MM');
+          if (monthStr !== galleryMonth) return false;
+        } catch (e) {
+          return false;
+        }
+      }
+      
+      if (gallerySearchQuery.trim() !== '') {
+        const query = gallerySearchQuery.toLowerCase();
+        if (galleryFilter === 'IN') {
+          // Nhập kho: Tra cứu mã lô
+          if (!t.batchNumber?.toLowerCase().includes(query)) {
+            return false;
+          }
+        } else {
+          // Xuất kho: Tra cứu đơn vị
+          if (!t.partnerName.toLowerCase().includes(query)) {
+            return false;
+          }
+        }
+      }
+      
+      return true;
+    });
+  }, [transactions, galleryFilter, galleryMonth, gallerySearchQuery]);
+
   const batchLifecycle = useMemo(() => {
     const bq = batchSearchQuery.toLowerCase().trim();
     if (!bq || bq.length < 2) return null;
@@ -2284,14 +2345,24 @@ export default function App() {
                           </div>
 
                           <div className="p-4 sm:p-6 bg-slate-50/50 rounded-2xl border border-dotted border-slate-200 group hover:bg-white hover:shadow-xl hover:shadow-slate-200/50 transition-all duration-500">
-                             <p className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Lô hàng chuẩn bị hết hạn</p>
+                             <p className="text-[9px] sm:text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Lô hàng chậm (Aging &gt; 15 ngày)</p>
                              <div className="flex items-baseline gap-2">
-                                <h5 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">12</h5>
-                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">SKUs</span>
+                                <h5 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                                  {batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 15).length}
+                                </h5>
+                                <span className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase">Lô hàng</span>
                              </div>
                              <div className="mt-3 sm:mt-4 flex items-center gap-2">
-                                <div className="w-2 h-2 rounded-full bg-amber-500" />
-                                <span className="text-[9px] sm:text-[10px] font-black text-amber-600 uppercase tracking-widest leading-none">WARNING</span>
+                                <div className={cn(
+                                  "w-2 h-2 rounded-full",
+                                  batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 15).length > 0 ? "bg-rose-500 animate-pulse" : "bg-emerald-500"
+                                )} />
+                                <span className={cn(
+                                  "text-[9px] sm:text-[10px] font-black uppercase tracking-widest leading-none",
+                                  batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 15).length > 0 ? "text-rose-600" : "text-emerald-600"
+                                )}>
+                                  {batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 15).length > 0 ? 'CRITICAL' : 'ALL CLEAR'}
+                                </span>
                              </div>
                           </div>
                        </div>
@@ -2347,44 +2418,123 @@ export default function App() {
                       </div>
                     </Card>
 
-                    {/* Integrated Table Row */}
-                    <Card title="Nhật ký Giao dịch Chiến lược" className="lg:col-span-12">
+                    {/* Batch Aging & Slow Moving Inventory Dashboard */}
+                    <Card title="📊 Phân tích Lô hàng mới (Trong 7 ngày)" className="lg:col-span-12">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        {/* Aging Categories Summary */}
+                        <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 flex flex-col items-center text-center">
+                          <p className="text-[9px] font-black text-emerald-600 uppercase tracking-widest mb-1">Tuân thủ FIFO (Mới)</p>
+                          <p className="text-2xl font-black text-emerald-700">{batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) < 7).length}</p>
+                          <p className="text-[8px] font-bold text-emerald-500 mt-1 uppercase">Dưới 7 ngày</p>
+                        </div>
+                        <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 flex flex-col items-center text-center">
+                          <p className="text-[9px] font-black text-amber-600 uppercase tracking-widest mb-1">Cảnh báo chậm (Lưu kho)</p>
+                          <p className="text-2xl font-black text-amber-700">{batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) >= 7 && differenceInDays(new Date(), parseISO(b.importDate)) <= 15).length}</p>
+                          <p className="text-[8px] font-bold text-amber-500 mt-1 uppercase">7 - 15 ngày</p>
+                        </div>
+                        <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 flex flex-col items-center text-center">
+                          <p className="text-[9px] font-black text-rose-600 uppercase tracking-widest mb-1">Hàng tồn đọng (Critical)</p>
+                          <p className="text-2xl font-black text-rose-700">{batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 15).length}</p>
+                          <p className="text-[8px] font-bold text-rose-500 mt-1 uppercase">Trên 15 ngày</p>
+                        </div>
+                      </div>
+
                       <div className="overflow-x-auto">
                         <table className="w-full text-left">
                           <thead>
                             <tr className="bg-slate-50/20">
-                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6">Ngày thực tế</th>
-                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-right">Phát sinh</th>
+                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6">Mã Lô</th>
                               <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6">Sản phẩm</th>
-                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-right">Khối lượng</th>
-                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6">Đối tác</th>
+                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-right">Tồn hiện tại</th>
+                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-center">Ngày nhập</th>
+                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-right">Thời gian lưu kho</th>
+                              <th className="font-serif italic text-slate-400 text-[10px] sm:text-xs uppercase tracking-widest py-3 sm:py-5 px-3 sm:px-6 text-right">Trạng thái</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100/50">
-                            {transactions.slice(0, 8).map((t) => (
-                              <tr key={t.id} className="hover:bg-slate-50/50 transition-all group">
-                                <td className="py-3 sm:py-5 px-3 sm:px-6 font-mono text-[9px] sm:text-xs text-slate-400 font-bold">{format(parseISO(t.date), 'dd/MM HH:mm')}</td>
-                                <td className="py-3 sm:py-5 px-3 sm:px-6 text-right">
-                                  <span className={cn(
-                                    "px-2 py-0.5 sm:px-3 sm:py-1 rounded-full text-[8px] sm:text-[10px] font-black uppercase tracking-[0.1em] sm:tracking-[0.15em] border inline-flex items-center gap-1 sm:gap-1.5 shadow-sm",
-                                    t.type === 'IN' ? "bg-emerald-50 border-emerald-100 text-emerald-600" : "bg-rose-50 border-rose-100 text-rose-600"
-                                  )}>
-                                    <div className={cn("w-1 h-1 rounded-full", t.type === 'IN' ? "bg-emerald-500" : "bg-rose-500")} />
-                                    {t.type === 'IN' ? 'Nhập' : 'Xuất'}
-                                  </span>
+                            {batches
+                              .filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) <= 7)
+                              .sort((a, b) => new Date(b.importDate).getTime() - new Date(a.importDate).getTime()) // Newest first for recent view
+                              .slice(0, 7)
+                              .map((batch) => {
+                                const age = differenceInDays(new Date(), parseISO(batch.importDate));
+                                return (
+                                  <tr key={`${batch.productId}_${batch.batchNumber}`} className="hover:bg-slate-50/50 transition-all group">
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6">
+                                      <div className="flex items-center gap-3">
+                                        <div className={cn(
+                                          "w-2 h-8 rounded-full shadow-sm",
+                                          age > 15 ? "bg-rose-500 shadow-rose-200" : age >= 7 ? "bg-amber-400 shadow-amber-100" : "bg-emerald-400 shadow-emerald-100"
+                                        )} />
+                                        <span className="font-mono text-[10px] sm:text-xs text-slate-600 font-black">#{batch.batchNumber}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6">
+                                      <div className="flex flex-col">
+                                        <span className="text-xs sm:text-sm font-black text-slate-900 leading-none tracking-tight">{batch.productName}</span>
+                                        <span className="text-[8px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 sm:mt-1.5">{batch.category}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6 font-mono text-right text-xs sm:text-sm font-black text-slate-900">
+                                      {formatNumber(batch.stock)}
+                                    </td>
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6 text-center font-mono text-[9px] sm:text-xs text-slate-400 font-bold">
+                                      {formatDisplayDate(batch.importDate)}
+                                    </td>
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6 text-right">
+                                      <span className={cn(
+                                        "text-xs sm:text-sm font-black italic",
+                                        age > 15 ? "text-rose-600" : age >= 7 ? "text-amber-600" : "text-emerald-600"
+                                      )}>
+                                        {age} <span className="text-[9px] not-italic opacity-60">ngày</span>
+                                      </span>
+                                    </td>
+                                    <td className="py-3 sm:py-5 px-3 sm:px-6 text-right">
+                                      <span className={cn(
+                                        "px-2 py-0.5 sm:px-3 sm:py-1 rounded-full text-[8px] sm:text-[9px] font-black uppercase tracking-widest border inline-flex items-center gap-1 shadow-sm",
+                                        age > 15 ? "bg-rose-50 border-rose-100 text-rose-600" : 
+                                        age >= 7 ? "bg-amber-50 border-amber-100 text-amber-600" : 
+                                        "bg-emerald-50 border-emerald-100 text-emerald-600"
+                                      )}>
+                                        {age > 15 ? 'Đọng kho' : age >= 7 ? 'Chậm' : 'Bình thường'}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            {batches.filter(b => b.stock > 0).length === 0 && (
+                              <tr>
+                                <td colSpan={6} className="py-20 text-center">
+                                  <AlertCircle className="w-10 h-10 text-slate-100 mx-auto mb-4" />
+                                  <p className="text-xs font-bold text-slate-300 uppercase tracking-widest">Không có lô hàng tồn kho hiện tại</p>
                                 </td>
-                                <td className="py-3 sm:py-5 px-3 sm:px-6">
-                                  <div className="flex flex-col">
-                                    <span className="text-xs sm:text-sm font-black text-slate-900 leading-none tracking-tight">{t.productName}</span>
-                                    <span className="text-[8px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1 sm:mt-1.5">{t.category}</span>
-                                  </div>
-                                </td>
-                                <td className="py-3 sm:py-5 px-3 sm:px-6 font-mono text-right text-xs sm:text-sm font-black text-slate-900">{formatNumber(t.quantity)}</td>
-                                <td className="py-3 sm:py-5 px-3 sm:px-6 text-[9px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">{t.partnerName}</td>
                               </tr>
-                            ))}
+                            )}
                           </tbody>
                         </table>
+                      </div>
+                      
+                      <div className="mt-8 p-5 bg-slate-50/50 rounded-2xl border border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                          <Info className="w-5 h-5 text-primary" />
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-loose">
+                              Dashboard hiện đang lọc các lô hàng nhập trong vòng <span className="text-primary font-black">7 ngày qua</span> để tối ưu hiển thị.
+                            </p>
+                            {batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 7).length > 0 && (
+                              <p className="text-[9px] font-bold text-rose-500 uppercase tracking-widest">
+                                Chú ý: Có {batches.filter(b => b.stock > 0 && differenceInDays(new Date(), parseISO(b.importDate)) > 7).length} lô hàng khác đang có dấu hiệu chậm/đọng kho (&gt; 7 ngày).
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <Button 
+                          variant="outline" 
+                          onClick={() => setActiveTab('inventory')}
+                          className="bg-white text-[10px] w-full sm:w-auto"
+                        >
+                          KIỂM TRA TOÀN KHO
+                        </Button>
                       </div>
                     </Card>
                   </div>
@@ -4129,35 +4279,73 @@ export default function App() {
                       </p>
                     </div>
                     
-                    <div className="flex bg-slate-100/50 backdrop-blur-sm p-1.5 rounded-[20px] sm:rounded-[24px] w-full md:w-auto border border-slate-200/50 shadow-inner">
-                      <button 
-                        onClick={() => setGalleryFilter('IN')}
-                        className={cn(
-                          "flex-1 md:px-8 py-3 rounded-lg sm:rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300",
-                          galleryFilter === 'IN' 
-                            ? "bg-white text-amber-600 shadow-xl shadow-amber-500/10 border border-slate-100" 
-                            : "text-slate-400 hover:text-slate-600"
+                    <div className="flex flex-col lg:flex-row items-center gap-4 w-full md:w-auto">
+                      {/* Search Dynamic Field */}
+                      <div className="relative group w-full lg:w-64">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-primary transition-colors" />
+                        <input 
+                          type="text" 
+                          placeholder={galleryFilter === 'IN' ? "Tra cứu MÃ LÔ..." : "Tra cứu ĐƠN VỊ..."} 
+                          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-[11px] sm:text-xs font-black placeholder:text-slate-300 focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary transition-all shadow-sm uppercase tracking-widest text-slate-700"
+                          value={gallerySearchQuery}
+                          onChange={(e) => setGallerySearchQuery(e.target.value)}
+                        />
+                        {gallerySearchQuery && (
+                          <button 
+                            onClick={() => setGallerySearchQuery('')}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
                         )}
-                      >
-                        Nhập kho
-                      </button>
-                      <button 
-                        onClick={() => setGalleryFilter('OUT')}
-                        className={cn(
-                          "flex-1 md:px-8 py-3 rounded-lg sm:rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300",
-                          galleryFilter === 'OUT' 
-                            ? "bg-white text-rose-600 shadow-xl shadow-rose-500/10 border border-slate-100" 
-                            : "text-slate-400 hover:text-slate-600"
-                        )}
-                      >
-                        Xuất kho
-                      </button>
+                      </div>
+
+                      {/* Month Filter */}
+                      <div className="relative w-full lg:w-48">
+                        <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                        <select 
+                          className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-[11px] sm:text-xs font-black focus:outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary transition-all appearance-none cursor-pointer shadow-sm uppercase tracking-widest text-slate-700"
+                          value={galleryMonth}
+                          onChange={(e) => setGalleryMonth(e.target.value)}
+                        >
+                          {galleryMonthOptions.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label.toUpperCase()}</option>
+                          ))}
+                        </select>
+                        <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                      </div>
+
+                      {/* Toggle IN/OUT */}
+                      <div className="flex bg-slate-100/50 backdrop-blur-sm p-1.5 rounded-[20px] sm:rounded-[24px] w-full md:w-auto border border-slate-200/50 shadow-inner">
+                        <button 
+                          onClick={() => setGalleryFilter('IN')}
+                          className={cn(
+                            "flex-1 md:px-8 py-3 rounded-lg sm:rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300",
+                            galleryFilter === 'IN' 
+                              ? "bg-white text-amber-600 shadow-xl shadow-amber-500/10 border border-slate-100" 
+                              : "text-slate-400 hover:text-slate-600"
+                          )}
+                        >
+                          Nhập kho
+                        </button>
+                        <button 
+                          onClick={() => setGalleryFilter('OUT')}
+                          className={cn(
+                            "flex-1 md:px-8 py-3 rounded-lg sm:rounded-xl text-[10px] font-black uppercase tracking-widest transition-all duration-300",
+                            galleryFilter === 'OUT' 
+                              ? "bg-white text-rose-600 shadow-xl shadow-rose-500/10 border border-slate-100" 
+                              : "text-slate-400 hover:text-slate-600"
+                          )}
+                        >
+                          Xuất kho
+                        </button>
+                      </div>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
-                    {transactions.filter(t => t.type === galleryFilter && t.evidencePhotoUrl).length > 0 ? (
-                      transactions.filter(t => t.type === galleryFilter && t.evidencePhotoUrl).map((t) => (
+                    {filteredGalleryTransactions.length > 0 ? (
+                      filteredGalleryTransactions.map((t) => (
                         <motion.div 
                           key={t.id}
                           layoutId={`img-${t.id}`}
