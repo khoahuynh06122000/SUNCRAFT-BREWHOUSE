@@ -526,6 +526,10 @@ export default function App() {
   };
 
   const clearAllRevenueData = async () => {
+    if (!isOwner) {
+      alert("Chỉ anh Khoa mới có quyền xóa sạch dữ liệu doanh thu ạ!");
+      return;
+    }
     if (!window.confirm('CẢNH BÁO: Hành động này sẽ XÓA TOÀN BỘ dữ liệu doanh thu đang có trên hệ thống. Bạn có chắc chắn muốn thực hiện không?')) return;
     
     setLoading(true);
@@ -550,9 +554,8 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Security check: Only Khoahuynh or ADMIN
-    const isAuthorized = userEmail?.toUpperCase() === 'KHOA.HUYNH.06.12.2000@GMAIL.COM' || 
-                       user?.toUpperCase().trim() === 'ADMIN';
+    // Security check: Removed as requested, now available to all users
+    const isAuthorized = true;
 
     if (!isAuthorized) {
       alert('Chỉ quản trị viên hoặc Khoahuynh mới có quyền nạp dữ liệu hệ thống.');
@@ -768,7 +771,7 @@ export default function App() {
   };
 
   const handleDeleteSyncData2104 = async () => {
-    if (!isSuperAdmin) {
+    if (!isOwner) {
       alert("Tin Tin rất tiếc, chỉ anh Khoa mới có quyền thực hiện thao tác 'dọn dẹp' này ạ.");
       return;
     }
@@ -988,6 +991,10 @@ export default function App() {
   };
 
   const handleDeletePartner = (id: string) => {
+    if (!isOwner) {
+      alert("Chỉ anh Khoa mới có quyền xóa đối tác ạ!");
+      return;
+    }
     if (window.confirm('Bạn có chắc chắn muốn xóa đối tác này không? Dữ liệu giao dịch liên quan sẽ không bị xóa nhưng sẽ mất liên kết tên đối tác chính thức.')) {
       setPartners(partners.filter(p => p.id !== id));
     }
@@ -1478,8 +1485,8 @@ export default function App() {
   };
 
   const handleDeleteAllTransactions = async () => {
-    if (!isSuperAdmin) {
-      alert("Chỉ Khoa mới có quyền xóa sạch dữ liệu ạ!");
+    if (!isOwner) {
+      alert("Chỉ anh Khoa mới có quyền xóa sạch dữ liệu ạ!");
       return;
     }
     
@@ -1500,6 +1507,10 @@ export default function App() {
   };
 
   const handleDeleteTransaction = async (id: string, productName: string) => {
+    if (!isOwner) {
+      alert("Chỉ anh Khoa mới có quyền xóa giao dịch ạ!");
+      return;
+    }
     if (!window.confirm(`Anh có chắc chắn muốn xóa giao dịch của sản phẩm "${productName}" này không?`)) return;
     
     try {
@@ -1512,14 +1523,19 @@ export default function App() {
   };
 
   const isSuperAdmin = useMemo(() => {
-    return userEmail?.toUpperCase() === 'KHOA.HUYNH.06.12.2000@GMAIL.COM' || user?.toLowerCase().trim() === 'khoahuynh';
-  }, [userEmail, user]);
+    // Everyone signed in can now perform most operations
+    return !!user;
+  }, [user]);
+
+  const isOwner = useMemo(() => {
+    // ONLY the specific owner can delete
+    return userEmail?.toUpperCase() === 'KHOA.HUYNH.06.12.2000@GMAIL.COM';
+  }, [userEmail]);
 
   const isAuthorizedFull = useMemo(() => {
-    const isAdminName = user?.toUpperCase().trim() === 'ADMIN';
-    const isOwnerName = user?.toLowerCase().trim() === 'expert';
-    return isSuperAdmin || isAdminName || isOwnerName;
-  }, [user, isSuperAdmin]);
+    // Everyone signed in can now see all reports and features
+    return !!user;
+  }, [user]);
 
   // Nav items configuration
   const navItems = useMemo(() => {
@@ -1535,13 +1551,8 @@ export default function App() {
       { id: 'history', label: 'Lịch sử', icon: History, color: '#64748b' },
     ];
     
-    // Only Khoa/Admin see reports and revenue management
-    if (isAuthorizedFull) return allItems;
-    
-    // OTHERS/GUESTS: allow essential operations, restrict Reports and Revenue
-    return allItems.filter(item => 
-      ['dashboard', 'inventory', 'import', 'export', 'gallery', 'partners', 'history'].includes(item.id)
-    );
+    // Everyone sees reports and revenue management now
+    return allItems;
   }, [isAuthorizedFull]);
 
   // Handle unauthorized tab access

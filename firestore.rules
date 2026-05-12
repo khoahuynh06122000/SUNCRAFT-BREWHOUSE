@@ -31,16 +31,10 @@ service cloud.firestore {
       return resource.data;
     }
     
-    // Authorization for Revenue Management (Khoahuynh or ADMIN)
-    function isAuthorizedUser() {
-      let email = request.auth.token.get('email', '').upper();
-      let name = request.auth.token.get('name', '').lower();
-      return isSignedIn() && (
-        email == 'KHOA.HUYNH.06.12.2000@GMAIL.COM' ||
-        email.split('@')[0] == 'ADMIN' ||
-        name == 'expert' ||
-        name == 'khoahuynh'
-      );
+    // Authorization checks
+    function isKhoa() {
+      // Return true only if the user is the specific owner email
+      return isSignedIn() && request.auth.token.get('email', '').upper() == 'KHOA.HUYNH.06.12.2000@GMAIL.COM';
     }
 
     // -------------------------------------------------------------------------
@@ -60,11 +54,8 @@ service cloud.firestore {
 
     match /transactions/{transactionId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidTransaction(incoming()) && (
-        isAuthorizedUser() ||
-        incoming().createdBy == request.auth.token.get('email', 'Guest')
-      );
-      allow update, delete: if isAuthorizedUser();
+      allow create, update: if isSignedIn() && isValidTransaction(incoming());
+      allow delete: if isKhoa();
     }
 
     // 2. Revenue Records (Global System Data)
@@ -78,9 +69,8 @@ service cloud.firestore {
 
     match /revenue/{recordId} {
       allow read: if isSignedIn();
-      allow create: if isAuthorizedUser() && isValidRevenue(incoming());
-      allow update: if isAuthorizedUser() && isValidRevenue(incoming());
-      allow delete: if isAuthorizedUser();
+      allow create, update: if isSignedIn() && isValidRevenue(incoming());
+      allow delete: if isKhoa();
     }
 
     // 3. Partners
@@ -93,7 +83,7 @@ service cloud.firestore {
     match /partners/{partnerId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && isValidPartner(incoming());
-      allow delete: if isAuthorizedUser();
+      allow delete: if isKhoa();
     }
   }
 }
