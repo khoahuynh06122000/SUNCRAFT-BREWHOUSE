@@ -31,6 +31,7 @@ import {
   CreditCard,
   Droplet,
   CheckCircle,
+  Truck,
   Camera,
   Image as ImageIcon,
   FileSpreadsheet,
@@ -118,6 +119,7 @@ import {
   collection,
   doc,
   setDoc,
+  updateDoc,
   deleteDoc,
   onSnapshot,
   query,
@@ -951,6 +953,7 @@ export default function App() {
     batchNumber: string;
     evidencePhotoUrl: string;
     date?: string;
+    isInTransit?: boolean;
   }>({
     productId: products[0]?.id || '',
     quantity: 0,
@@ -959,8 +962,15 @@ export default function App() {
     notes: '',
     batchNumber: '',
     evidencePhotoUrl: '',
-    date: format(new Date(), 'yyyy-MM-dd')
+    date: format(new Date(), 'yyyy-MM-dd'),
+    isInTransit: false
   });
+
+  const [selectedInTransit, setSelectedInTransit] = useState<Transaction | null>(null);
+  const [actualReceivedQty, setActualReceivedQty] = useState<number>(0);
+  const [lossReason, setLossReason] = useState<string>('');
+  const [lossEvidencePhoto, setLossEvidencePhoto] = useState<string>('');
+  const [showLossModal, setShowLossModal] = useState(false);
 
   const [showAddPartner, setShowAddPartner] = useState(false);
   const [partnerFormData, setPartnerFormData] = useState<Omit<Partner, 'id'>>({
@@ -990,6 +1000,59 @@ export default function App() {
     });
   };
 
+  const handleReportLoss = async () => {
+    if (!selectedInTransit || actualReceivedQty < 0) return;
+    
+    try {
+      setLoading(true);
+      const diff = selectedInTransit.quantity - actualReceivedQty;
+      
+      if (diff > 0) {
+        // Create loss transaction
+        const lossId = `loss-${Date.now()}`;
+        const lossTrx: Transaction = {
+          ...selectedInTransit,
+          id: lossId,
+          type: 'LOSS',
+          quantity: diff,
+          notes: `[HAO HỤT TỪ ĐƠN ${selectedInTransit.id}] Lý do: ${lossReason}`,
+          status: 'completed',
+          date: new Date().toISOString(),
+          evidencePhotoUrl: lossEvidencePhoto || undefined
+        };
+        await setDoc(doc(db, 'transactions', lossId), lossTrx);
+
+        // Update original transaction
+        await updateDoc(doc(db, 'transactions', selectedInTransit.id), {
+          quantity: actualReceivedQty,
+          status: 'completed',
+          notes: `${selectedInTransit.notes || ''} (Đã điều chỉnh từ ${selectedInTransit.quantity} do hao hụt)`.trim(),
+          updatedAt: new Date().toISOString(),
+          evidencePhotoUrl: lossEvidencePhoto || selectedInTransit.evidencePhotoUrl
+        });
+      } else {
+        // Just confirm with possible new photo
+        await updateDoc(doc(db, 'transactions', selectedInTransit.id), {
+          status: 'completed',
+          updatedAt: new Date().toISOString(),
+          evidencePhotoUrl: lossEvidencePhoto || selectedInTransit.evidencePhotoUrl,
+          notes: `${selectedInTransit.notes || ''} (Đã xác nhận nhận đủ)`.trim()
+        });
+      }
+
+      setShowLossModal(false);
+      setSelectedInTransit(null);
+      setActualReceivedQty(0);
+      setLossReason('');
+      setLossEvidencePhoto('');
+      alert('Đã xác nhận hoàn thành đơn hàng.');
+    } catch (err) {
+      console.error("Error reporting loss:", err);
+      alert('Lỗi báo cáo hao hụt.');
+    } finally {
+      setLoading(false);
+    }
+  };
   const handleDeletePartner = (id: string) => {
     if (!isOwner) {
       alert("Chỉ anh Khoa mới có quyền xóa đối tác ạ!");
@@ -1140,7 +1203,7 @@ export default function App() {
             importDate: t.date
           });
         }
-      } else if (t.type === 'OUT') {
+      } else if (t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') {
         if (existing) {
           existing.stock -= t.quantity;
           existing.lastExportDate = t.date;
@@ -1237,13 +1300,17 @@ export default function App() {
 
     // 1. Calculate In/Out for the period
     filteredTransactionsForReport.forEach(t => {
+      // Don't count in-transit exports in the "OUT" reports until they are completed
+      if (t.type === 'OUT' && t.status === 'in_transit') return;
+
       const entry = summaryMap.get(t.productId);
       const product = products.find(p => p.id === t.productId);
       if (entry && product) {
-        if (t.type === 'IN') {
+        if (t.type === 'IN' || t.type === 'OPENING') {
           entry.in += t.quantity;
           entry.inValue += t.quantity * product.price;
         } else {
+          // General OUT categories (OUT, LOSS, DAMAGE)
           entry.out += t.quantity;
           entry.outValue += t.quantity * product.price;
         }
@@ -1268,6 +1335,9 @@ export default function App() {
       : transactions;
 
     baseTransactions.forEach(t => {
+      // Don't subtract from closing stock if it's still in transit
+      if (t.type === 'OUT' && t.status === 'in_transit') return;
+
       const entry = summaryMap.get(t.productId);
       if (entry) {
         const transDate = parseISO(t.date);
@@ -1310,6 +1380,9 @@ export default function App() {
 
     // Calculate
     transactions.forEach(t => {
+      // Don't subtract from current inventory if it's still in transit
+      if (t.type === 'OUT' && t.status === 'in_transit') return;
+
       const item = invMap.get(t.productId);
       const product = products.find(p => p.id === t.productId);
       if (item && product) {
@@ -1329,7 +1402,11 @@ export default function App() {
   // Derived State: Stats & Turnover
   const stats = useMemo(() => {
     const totalIn = filteredTransactionsByTime.filter(t => t.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
-    const totalOut = filteredTransactionsByTime.filter(t => t.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0);
+    const totalOut = filteredTransactionsByTime.filter(t => 
+      (t.type === 'OUT' && (t.status === 'completed' || !t.status)) || 
+      t.type === 'LOSS' || 
+      t.type === 'DAMAGE'
+    ).reduce((acc, curr) => acc + curr.quantity, 0);
     const currentStock = inventory.reduce((acc, curr) => acc + curr.stock, 0);
     const partnerCount = partners.length;
     const totalLiters = inventory.reduce((acc, curr) => acc + curr.totalLiters, 0);
@@ -1438,13 +1515,16 @@ export default function App() {
             batchNumber: alloc.batchNumber,
             evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
             createdBy: userEmail || user || 'Guest',
-            referenceGroupId: referenceGroupId
+            referenceGroupId: referenceGroupId,
+            status: newTransaction.isInTransit ? 'in_transit' : 'completed',
+            originalQuantity: alloc.quantity
           };
           await setDoc(doc(db, 'transactions', transactionId), transaction);
         }
-        setNewTransaction({ ...newTransaction, quantity: 0, notes: '', batchNumber: '', evidencePhotoUrl: '' });
-        setActiveTab('history');
-        alert('Đã cập nhật giao dịch xuất kho FIFO thành công.');
+        const inTransit = newTransaction.isInTransit;
+        setNewTransaction({ ...newTransaction, quantity: 0, notes: '', batchNumber: '', evidencePhotoUrl: '', isInTransit: false });
+        setActiveTab(inTransit ? 'in-transit' : 'history');
+        alert(inTransit ? 'Đã ghi nhận đơn hàng đi đường (đang vận chuyển).' : 'Đã cập nhật giao dịch xuất kho FIFO thành công.');
       } catch (err) {
         console.error("Error adding transaction:", err);
         alert("Không thể thực hiện giao dịch lên Cloud.");
@@ -1544,6 +1624,7 @@ export default function App() {
       { id: 'inventory', label: 'Tồn kho', icon: Package, color: '#f59e0b' },
       { id: 'reports', label: 'Báo cáo', icon: TrendingUp, color: '#f43f5e' },
       { id: 'revenue-mgmt', label: 'Doanh thu', icon: FileSpreadsheet, color: '#8b5cf6' },
+      { id: 'in-transit', label: 'Đơn đi đường', icon: Truck, color: '#fbbf24' },
       { id: 'import', label: 'Nhập kho', icon: PlusCircle, color: '#10b981' },
       { id: 'export', label: 'Xuất kho', icon: MinusCircle, color: '#f97316' },
       { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, color: '#ec4899' },
@@ -3104,6 +3185,222 @@ export default function App() {
                     </div>
                   )}
 
+              {activeTab === 'in-transit' && (
+                <div className="space-y-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div>
+                      <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Quản lý đơn đi đường</h2>
+                      <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-1">Theo dõi và xác nhận các đơn hàng đang vận chuyển (2-3 ngày).</p>
+                    </div>
+                  </div>
+
+                  <Card noPadding className="premium-shadow overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-100">
+                            <th className="py-4 px-6 font-black text-[10px] text-slate-400 uppercase tracking-widest">Ngày xuất</th>
+                            <th className="py-4 px-6 font-black text-[10px] text-slate-400 uppercase tracking-widest">Sản phẩm</th>
+                            <th className="py-4 px-6 font-black text-[10px] text-slate-400 uppercase tracking-widest">Đối tác</th>
+                            <th className="py-4 px-6 font-black text-[10px] text-slate-400 uppercase tracking-widest text-right">SL Gửi</th>
+                            <th className="py-4 px-6 font-black text-[10px] text-slate-400 uppercase tracking-widest text-center">Thao tác</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {transactions.filter(t => t.status === 'in_transit').length > 0 ? (
+                            transactions.filter(t => t.status === 'in_transit').map((t) => (
+                              <tr key={t.id} className="hover:bg-amber-50/30 transition-all group">
+                                <td className="py-4 px-6 text-[11px] font-mono font-bold text-slate-500">
+                                  {formatDate(t.date)}
+                                </td>
+                                <td className="py-4 px-6">
+                                  <div className="font-bold text-slate-900 text-sm leading-tight">{t.productName}</div>
+                                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-1">LOT: {t.batchNumber || 'N/A'}</div>
+                                </td>
+                                <td className="py-4 px-6">
+                                  <span className="px-2 py-0.5 bg-white border border-slate-200 rounded-full text-[10px] font-black uppercase tracking-tighter text-slate-700">
+                                    {t.partnerName}
+                                  </span>
+                                </td>
+                                <td className="py-4 px-6 text-right font-mono font-black text-sm text-amber-600">
+                                  {formatNumber(t.quantity)}
+                                </td>
+                                <td className="py-4 px-6">
+                                  <div className="flex items-center justify-center gap-2">
+                                    <button 
+                                      onClick={() => {
+                                        setSelectedInTransit(t);
+                                        setActualReceivedQty(t.quantity);
+                                        setShowLossModal(true);
+                                      }}
+                                      className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
+                                    >
+                                      <CheckCircle className="w-3.5 h-3.5" />
+                                      Xác nhận nhận hàng
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={5} className="py-20 text-center text-slate-300 font-bold uppercase tracking-[0.2em] text-xs">Không có đơn hàng nào đang đi đường.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+
+                  {/* Loss Reporting Modal */}
+                  <AnimatePresence>
+                    {showLossModal && selectedInTransit && (
+                      <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+                        <motion.div 
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          exit={{ opacity: 0 }}
+                          onClick={() => setShowLossModal(false)}
+                          className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
+                        />
+                        <motion.div 
+                          initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                          className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl overflow-hidden p-8"
+                        >
+                          <div className="flex items-center justify-between mb-8">
+                            <div>
+                              <h3 className="text-xl font-black text-slate-900 uppercase">XÁC NHẬN HOÀN THÀNH ĐƠN HÀNG</h3>
+                              <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Đơn hàng: {selectedInTransit.id}</p>
+                            </div>
+                            <button onClick={() => {
+                              setShowLossModal(false);
+                              setLossEvidencePhoto('');
+                            }} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                              <X className="w-5 h-5 text-slate-400" />
+                            </button>
+                          </div>
+
+                          <div className="space-y-6">
+                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-slate-400 font-bold">Sản phẩm:</span>
+                                  <span className="text-slate-900 font-black">{selectedInTransit.productName}</span>
+                                </div>
+                                <div className="flex justify-between text-xs">
+                                  <span className="text-slate-400 font-bold">Số lượng gửi:</span>
+                                  <span className="text-amber-600 font-black">{formatNumber(selectedInTransit.quantity)}</span>
+                                </div>
+                            </div>
+
+                            <Input 
+                              label="Số lượng thực nhận (Hàng lành lặn)"
+                              type="number"
+                              value={actualReceivedQty}
+                              onChange={(e: any) => setActualReceivedQty(Number(e.target.value))}
+                            />
+
+                            {actualReceivedQty < selectedInTransit.quantity && (
+                              <div className="space-y-2">
+                                <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Lý do hao hụt / Hư hại</label>
+                                <textarea 
+                                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-primary/5 focus:border-primary outline-none text-sm font-medium min-h-[100px]"
+                                  placeholder="Ví dụ: Nổ lon do va đập, thiếu hàng khi kiểm đếm..."
+                                  value={lossReason}
+                                  onChange={(e) => setLossReason(e.target.value)}
+                                />
+                              </div>
+                            )}
+
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng thực tế (Ảnh chụp nhận hàng)</label>
+                              
+                              {!lossEvidencePhoto ? (
+                                <div className="grid grid-cols-2 gap-4">
+                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-primary hover:bg-primary/5 transition-all cursor-pointer group">
+                                    <Camera className="w-8 h-8 text-slate-300 group-hover:text-primary transition-colors" />
+                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-primary tracking-tighter">Chụp ảnh</span>
+                                    <input 
+                                      type="file" 
+                                      className="hidden" 
+                                      accept="image/*" 
+                                      capture="environment"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onload = () => setLossEvidencePhoto(reader.result as string);
+                                          reader.readAsDataURL(file);
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-emerald-500 hover:bg-emerald-50 transition-all cursor-pointer group">
+                                    <ImageIcon className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
+                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-emerald-500 tracking-tighter">Chọn từ máy</span>
+                                    <input 
+                                      type="file" 
+                                      className="hidden" 
+                                      accept="image/*" 
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onload = () => setLossEvidencePhoto(reader.result as string);
+                                          reader.readAsDataURL(file);
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+                              ) : (
+                                <div className="relative rounded-2xl overflow-hidden group">
+                                  <img src={lossEvidencePhoto} alt="Evidence" className="w-full aspect-video object-cover" />
+                                  <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
+                                    <button 
+                                      onClick={() => setLossEvidencePhoto('')}
+                                      className="p-3 bg-rose-500 text-white rounded-full shadow-lg"
+                                    >
+                                      <Trash2 className="w-5 h-5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+
+                            {actualReceivedQty < selectedInTransit.quantity && (
+                              <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl">
+                                <div className="flex items-center gap-2 text-rose-600 mb-1">
+                                  <AlertCircle className="w-4 h-4" />
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Cảnh báo chênh lệch</span>
+                                </div>
+                                <p className="text-xs text-rose-500 font-bold italic">
+                                  Hệ thống sẽ tự động tách {formatNumber(selectedInTransit.quantity - actualReceivedQty)} đơn vị vào danh mục HAO HỤT/HƯ HỎNG.
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="pt-4 flex gap-3">
+                              <Button variant="outline" className="flex-1" onClick={() => {
+                                setShowLossModal(false);
+                                setLossEvidencePhoto('');
+                              }}>Hủy</Button>
+                              <Button 
+                                className={`flex-[2] ${actualReceivedQty < selectedInTransit.quantity ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-500 hover:bg-emerald-600'}`} 
+                                onClick={handleReportLoss}
+                              >
+                                {actualReceivedQty < selectedInTransit.quantity ? 'Xác nhận điều chỉnh' : 'Hoàn thành ghi nhận'}
+                              </Button>
+                            </div>
+                          </div>
+                        </motion.div>
+                      </div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
+
               {(activeTab === 'import' || activeTab === 'export') && (
                 <div className="max-w-2xl mx-auto space-y-6">
                   <div className="text-center space-y-2 mb-8">
@@ -3195,6 +3492,24 @@ export default function App() {
                           onChange={(e: any) => setNewTransaction({ ...newTransaction, notes: e.target.value })}
                         />
                       </div>
+
+                      {activeTab === 'export' && (
+                        <div className="md:col-span-2">
+                          <label className="flex items-center gap-3 cursor-pointer p-4 bg-amber-50 border border-amber-200 rounded-2xl hover:bg-amber-100 transition-all">
+                            <input 
+                              type="checkbox" 
+                              className="w-5 h-5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                              checked={newTransaction.isInTransit}
+                              onChange={(e) => setNewTransaction({ ...newTransaction, isInTransit: e.target.checked })}
+                            />
+                            <div className="flex flex-col">
+                              <span className="text-sm font-black text-amber-900 uppercase">Đơn hàng đi đường (Giao sau)</span>
+                              <span className="text-[10px] text-amber-700 font-bold">Tích chọn nếu hàng chưa đến tay đối tác ngay (cần xác nhận sau 2-3 ngày).</span>
+                            </div>
+                            <Truck className="w-5 h-5 text-amber-500 ml-auto" />
+                          </label>
+                        </div>
+                      )}
 
                       {(activeTab === 'import' || activeTab === 'export') && (
                         <div className="md:col-span-2 space-y-3">
@@ -3337,13 +3652,28 @@ export default function App() {
                               <td className="py-4 px-6 text-center">
                                 <span className={cn(
                                   "inline-flex items-center justify-center w-8 h-8 rounded-lg",
-                                  t.type === 'IN' ? "bg-emerald-50 text-emerald-600" : "bg-rose-50 text-rose-600"
+                                  (t.type === 'IN' || t.type === 'OPENING') ? "bg-emerald-50 text-emerald-600" : 
+                                  (t.type === 'LOSS' || t.type === 'DAMAGE') ? "bg-rose-100 text-rose-700" :
+                                  "bg-rose-50 text-rose-600"
                                 )}>
-                                  {t.type === 'IN' ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
+                                  {(t.type === 'IN' || t.type === 'OPENING') ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
                                 </span>
                               </td>
                               <td className="py-4 px-6">
-                                <div className="font-bold text-slate-900 text-sm leading-tight">{t.productName}</div>
+                                <div className="font-bold text-slate-900 text-sm leading-tight">
+                                  {t.productName}
+                                  {t.status === 'in_transit' && (
+                                    <span className="ml-2 px-2 py-0.5 bg-amber-100 text-amber-600 rounded-full text-[9px] font-black uppercase tracking-tighter flex inline-flex items-center gap-1 mt-1 md:mt-0">
+                                      <Truck className="w-3 h-3" />
+                                      Đang đi đường
+                                    </span>
+                                  )}
+                                  {(t.type === 'LOSS' || t.type === 'DAMAGE') && (
+                                    <span className="ml-2 px-2 py-0.5 bg-rose-100 text-rose-600 rounded-full text-[9px] font-black uppercase tracking-tighter mt-1 md:mt-0">
+                                      Hao hụt / Hư hại
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[10px] uppercase font-black tracking-widest text-slate-400 mt-0.5">{t.category} • {t.partnerName}</div>
                                 {t.batchNumber && (
                                   <div className="mt-1 text-[10px] font-mono font-black text-primary/60">LOT: {t.batchNumber}</div>
@@ -3352,9 +3682,9 @@ export default function App() {
                               <td className="py-4 px-6 text-right">
                                 <span className={cn(
                                   "font-mono font-black text-sm",
-                                  t.type === 'IN' ? "text-emerald-600" : "text-rose-600"
+                                  (t.type === 'IN' || t.type === 'OPENING') ? "text-emerald-600" : "text-rose-600"
                                 )}>
-                                  {t.type === 'IN' ? '+' : '-'}{formatNumber(t.quantity)}
+                                  {(t.type === 'IN' || t.type === 'OPENING') ? '+' : '-'}{formatNumber(t.quantity)}
                                 </span>
                               </td>
                               <td className="py-4 px-6">

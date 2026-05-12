@@ -4,7 +4,7 @@
  */
 
 export type Category = 'Lon' | 'Lít' | 'Chai';
-export type TransactionType = 'IN' | 'OUT' | 'OPENING';
+export type TransactionType = 'IN' | 'OUT' | 'OPENING' | 'LOSS' | 'DAMAGE';
 
 export interface Product {
   id: string;
@@ -40,6 +40,9 @@ export interface Transaction {
   evidencePhotoUrl?: string; // Ảnh biên bản
   createdBy: string; // Người thực hiện
   referenceGroupId?: string; // To group split transactions (e.g., one export split into multiple batches)
+  status?: 'completed' | 'in_transit'; // Default: completed
+  originalQuantity?: number; // Store original qty if reported as loss
+  deliveryDate?: string; // Date when actually received
 }
 
 export interface BatchInfo {
