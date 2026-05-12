@@ -8,7 +8,7 @@ import {
   signInAnonymously,
   updateProfile
 } from 'firebase/auth';
-import { getFirestore, collection, doc, getDocs, setDoc, updateDoc, deleteDoc, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, doc, getDocs, getDocFromServer, setDoc, updateDoc, deleteDoc, query, where, onSnapshot, orderBy } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
@@ -20,6 +20,7 @@ export {
   collection, 
   doc, 
   getDocs, 
+  getDocFromServer,
   setDoc, 
   updateDoc, 
   deleteDoc, 

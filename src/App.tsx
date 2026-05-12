@@ -22,6 +22,7 @@ import {
   Download,
   LogOut,
   ChevronRight,
+  ChevronDown,
   TrendingUp,
   TrendingDown,
   AlertCircle,
@@ -45,6 +46,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Package2,
+  PackageSearch,
   FileUp,
   Beer,
   Sun
@@ -123,8 +125,56 @@ import {
   deleteDoc,
   onSnapshot,
   query,
-  orderBy
+  orderBy,
+  getDocFromServer
 } from './firebase';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // --- Components ---
 
@@ -342,6 +392,8 @@ export default function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [partners, setPartners] = useState<Partner[]>([]);
   const [revenueData, setRevenueData] = useState<RevenueRecord[]>([]);
+  const [expandedInvoices, setExpandedInvoices] = useState<string[]>([]);
+  const [revenuePartnerSearch, setRevenuePartnerSearch] = useState('');
 
   const [products] = useState<Product[]>(INITIAL_PRODUCTS);
   const [showGuestNameModal, setShowGuestNameModal] = useState(false);
@@ -371,11 +423,25 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    // Test connection as required by security guidelines
+    const testConnection = async () => {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    };
+    testConnection();
+
     // Sync Transactions
     const qTransactions = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const unsubTransactions = onSnapshot(qTransactions, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as Transaction);
       setTransactions(data.length > 0 ? data : INITIAL_TRANSACTIONS);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'transactions');
     });
 
     // Sync Partners
@@ -383,6 +449,8 @@ export default function App() {
     const unsubPartners = onSnapshot(qPartners, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as Partner);
       setPartners(data.length > 0 ? data : INITIAL_PARTNERS);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'partners');
     });
 
     // Sync Revenue
@@ -390,6 +458,8 @@ export default function App() {
     const unsubRevenue = onSnapshot(qRevenue, (snapshot) => {
       const data = snapshot.docs.map(doc => doc.data() as RevenueRecord);
       setRevenueData(data);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'revenue');
     });
 
     return () => {
@@ -995,8 +1065,7 @@ export default function App() {
       setShowAddPartner(false);
       setPartnerFormData({ name: '', sapCode: '', type: 'AGENT', phone: '', address: '' });
     }).catch(err => {
-      console.error("Error adding partner:", err);
-      alert("Không thể thêm đối tác lên Cloud.");
+      handleFirestoreError(err, OperationType.WRITE, `partners/${newPartner.id}`);
     });
   };
 
@@ -1047,8 +1116,7 @@ export default function App() {
       setLossEvidencePhoto('');
       alert('Đã xác nhận hoàn thành đơn hàng.');
     } catch (err) {
-      console.error("Error reporting loss:", err);
-      alert('Lỗi báo cáo hao hụt.');
+      handleFirestoreError(err, OperationType.WRITE, selectedInTransit ? `transactions/${selectedInTransit.id}` : 'transactions');
     } finally {
       setLoading(false);
     }
@@ -1149,6 +1217,43 @@ export default function App() {
       }
     });
   }, [revenueData, timeFilter, filterBaseDate]);
+
+  const groupedRevenue = useMemo(() => {
+    const groups = new Map<string, {
+      invoiceNumber: string;
+      date: string;
+      partnerName: string;
+      totalAmount: number;
+      items: RevenueRecord[];
+    }>();
+
+    filteredRevenueByTime.forEach(r => {
+      // Filter by partner search
+      if (revenuePartnerSearch && !r.partnerName.toLowerCase().includes(revenuePartnerSearch.toLowerCase())) {
+        return;
+      }
+
+      const key = r.invoiceNumber || `N/A-${r.id}`;
+      const existing = groups.get(key);
+
+      if (existing) {
+        existing.totalAmount += r.totalAmount;
+        existing.items.push(r);
+      } else {
+        groups.set(key, {
+          invoiceNumber: r.invoiceNumber || 'N/A',
+          date: r.date,
+          partnerName: r.partnerName,
+          totalAmount: r.totalAmount,
+          items: [r]
+        });
+      }
+    });
+
+    return Array.from(groups.values()).sort((a, b) => {
+      return new Date(b.date).getTime() - new Date(a.date).getTime();
+    });
+  }, [filteredRevenueByTime, revenuePartnerSearch]);
 
   const periodLabel = useMemo(() => {
     if (timeFilter === 'all') return 'Tất cả thời gian';
@@ -1317,7 +1422,9 @@ export default function App() {
       }
     });
 
-    // 1.1 Add Revenue data to Outflows
+    /* 
+    // 1.1 Add Revenue data to Outflows - Removed to avoid double counting
+    // Stock flow should follow physical transactions. Revenue is for reconciliation.
     filteredRevenueByTime.forEach(r => {
       const product = products.find(p => p.name === r.productName);
       if (product) {
@@ -1328,6 +1435,7 @@ export default function App() {
         }
       }
     });
+    */
 
     // 2. Calculate Closing Stock (Stock at the end of period)
     const baseTransactions = batchSearchQuery.trim() 
@@ -1398,6 +1506,66 @@ export default function App() {
 
     return Array.from(invMap.values());
   }, [transactions, products]);
+
+  // Reconciliation Dashboard Logic
+  const reconciliationData = useMemo(() => {
+    const dataMap = new Map<string, { 
+      productId: string; 
+      productName: string; 
+      exportQty: number; 
+      revenueQty: number;
+      unit: string;
+      category: string;
+    }>();
+
+    // 1. Calculate physical exports
+    filteredTransactionsByTime.forEach(t => {
+      if (t.type === 'OUT') {
+        const product = products.find(p => p.id === t.productId);
+        const entry = dataMap.get(t.productId) || {
+          productId: t.productId,
+          productName: t.productName,
+          exportQty: 0,
+          revenueQty: 0,
+          unit: product?.unit || 'ĐV',
+          category: product?.category || 'KHÁC'
+        };
+        entry.exportQty += t.quantity;
+        dataMap.set(t.productId, entry);
+      }
+    });
+
+    // 2. Calculate revenue quantities
+    filteredRevenueByTime.forEach(r => {
+      const product = products.find(p => p.name === r.productName);
+      const productId = product ? product.id : `legacy_${r.productName}`;
+      
+      const entry = dataMap.get(productId) || {
+        productId,
+        productName: r.productName,
+        exportQty: 0,
+        revenueQty: 0,
+        unit: r.unit || 'ĐV',
+        category: product?.category || 'KHÁC'
+      };
+      entry.revenueQty += r.quantity;
+      dataMap.set(productId, entry);
+    });
+
+    return Array.from(dataMap.values()).map(item => ({
+      ...item,
+      diff: item.exportQty - item.revenueQty,
+      matchPercentage: item.exportQty > 0 ? Math.min(100, (item.revenueQty / item.exportQty) * 100) : (item.revenueQty === 0 ? 100 : 0)
+    })).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  }, [filteredTransactionsByTime, filteredRevenueByTime, products]);
+
+  const totalReconciliationScore = useMemo(() => {
+    if (reconciliationData.length === 0) return 100;
+    const totalDiff = reconciliationData.reduce((acc, curr) => acc + Math.abs(curr.diff), 0);
+    const totalExport = reconciliationData.reduce((acc, curr) => acc + curr.exportQty, 0);
+    if (totalExport === 0) return 100;
+    return Math.max(0, 100 - (totalDiff / totalExport * 100));
+  }, [reconciliationData]);
 
   // Derived State: Stats & Turnover
   const stats = useMemo(() => {
@@ -1522,12 +1690,18 @@ export default function App() {
           await setDoc(doc(db, 'transactions', transactionId), transaction);
         }
         const inTransit = newTransaction.isInTransit;
-        setNewTransaction({ ...newTransaction, quantity: 0, notes: '', batchNumber: '', evidencePhotoUrl: '', isInTransit: false });
+        setNewTransaction({ 
+          ...newTransaction, 
+          quantity: 0, 
+          notes: '', 
+          batchNumber: newTransaction.type === 'OPENING' ? 'Tồn 25/4' : '', 
+          evidencePhotoUrl: '', 
+          isInTransit: false 
+        });
         setActiveTab(inTransit ? 'in-transit' : 'history');
         alert(inTransit ? 'Đã ghi nhận đơn hàng đi đường (đang vận chuyển).' : 'Đã cập nhật giao dịch xuất kho FIFO thành công.');
       } catch (err) {
-        console.error("Error adding transaction:", err);
-        alert("Không thể thực hiện giao dịch lên Cloud.");
+        handleFirestoreError(err, OperationType.WRITE, 'transactions');
       } finally {
         setLoading(false);
       }
@@ -1555,12 +1729,17 @@ export default function App() {
 
     try {
       await setDoc(doc(db, 'transactions', transactionId), transaction);
-      setNewTransaction({ ...newTransaction, quantity: 0, notes: '', batchNumber: '', evidencePhotoUrl: '' });
+      setNewTransaction({ 
+        ...newTransaction, 
+        quantity: 0, 
+        notes: '', 
+        batchNumber: newTransaction.type === 'OPENING' ? 'Tồn 25/4' : '', 
+        evidencePhotoUrl: '' 
+      });
       setActiveTab('history');
       alert('Đã cập nhật giao dịch lên Cloud thành công.');
     } catch (err) {
-      console.error("Error adding transaction:", err);
-      alert("Không thể thực hiện giao dịch lên Cloud.");
+      handleFirestoreError(err, OperationType.WRITE, `transactions/${transactionId}`);
     }
   };
 
@@ -1579,8 +1758,7 @@ export default function App() {
       }
       alert("Đã xóa sạch bóng giao dịch rồi anh nhé! Sẵn sàng nạp mới ạ.");
     } catch (err) {
-      console.error(err);
-      alert("Có lỗi khi xóa dữ liệu. Anh kiểm tra lại kết nối mạng nhé.");
+      handleFirestoreError(err, OperationType.DELETE, 'transactions');
     } finally {
       setLoading(false);
     }
@@ -1597,8 +1775,7 @@ export default function App() {
       await deleteDoc(doc(db, 'transactions', id));
       alert("Đã xóa giao dịch thành công!");
     } catch (err) {
-      console.error("Error deleting transaction:", err);
-      alert("Không thể xóa giao dịch. Vui lòng kiểm tra lại.");
+      handleFirestoreError(err, OperationType.DELETE, `transactions/${id}`);
     }
   };
 
@@ -2939,64 +3116,141 @@ export default function App() {
 
                       {revenueData.length > 0 ? (
                         <>
+                          {/* Phân tích Doanh thu Chuyên sâu (Dashboard) */}
+                          <div className="space-y-6 mb-8">
+                            {/* Summary Metrics */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-primary">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Hiệu suất Khớp</p>
+                                <p className="text-xl font-black text-primary">{Math.round(totalReconciliationScore)}%</p>
+                                <div className="w-full h-1 bg-slate-50 rounded-full mt-2 overflow-hidden">
+                                  <div className="h-full bg-primary" style={{ width: `${totalReconciliationScore}%` }} />
+                                </div>
+                              </div>
+                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-slate-900">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng DT Gộp</p>
+                                <p className="text-xl font-black text-slate-900">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0))}</p>
+                                <p className="text-[8px] font-bold text-emerald-500 mt-1">Ghi nhận từ HĐ</p>
+                              </div>
+                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-emerald-500">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Lợi nhuận (Est.)</p>
+                                <p className="text-xl font-black text-emerald-600">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount * 0.15, 0))}</p>
+                                <p className="text-[8px] font-bold text-slate-300 mt-1">Marg. 15% Standard</p>
+                              </div>
+                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-indigo-500">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Quy mô Đơn</p>
+                                <p className="text-xl font-black text-slate-900">{groupedRevenue.length}</p>
+                                <p className="text-[8px] font-bold text-slate-300 mt-1">Hóa đơn trong kỳ</p>
+                              </div>
+                            </div>
+                          </div>
+
                           {/* Manager/Analyst Executive Summary */}
                           <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                             <div className="lg:col-span-3">
-                              <Card className="bg-white border-primary/20 shadow-xl p-8 relative overflow-hidden group">
-                                <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2" />
-                                <div className="relative z-10 space-y-4">
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
-                                      <TrendingUp className="w-5 h-5" />
+                              <Card className="bg-white border border-slate-100 shadow-xl p-0 overflow-hidden rounded-3xl">
+                                <div className="grid grid-cols-1 md:grid-cols-12">
+                                  {/* Sidebar Metric */}
+                                  <div className="md:col-span-4 bg-slate-900 p-6 sm:p-8 text-white flex flex-col justify-between relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 opacity-5 -translate-y-1/4 translate-x-1/4">
+                                      <ShieldCheck className="w-32 sm:w-48 h-32 sm:h-48" />
                                     </div>
-                                    <h4 className="text-xl font-black text-slate-900 tracking-tight">Phân tích Chiến lược & Đề xuất</h4>
+                                    <div className="relative z-10">
+                                      <p className="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-1 sm:mb-2 text-center md:text-left">Chỉ số Khớp lệnh</p>
+                                      <h3 className="text-4xl sm:text-5xl font-bold tracking-tighter text-center md:text-left">{Math.round(totalReconciliationScore)}%</h3>
+                                      <div className="mt-3 sm:mt-4">
+                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden">
+                                          <motion.div 
+                                            initial={{ width: 0 }}
+                                            animate={{ width: `${totalReconciliationScore}%` }}
+                                            className="h-full bg-primary"
+                                          />
+                                        </div>
+                                      </div>
+                                      <p className="text-[9px] sm:text-[10px] font-medium text-white/50 mt-3 sm:mt-4 leading-relaxed uppercase tracking-wider text-center md:text-left">
+                                        {totalReconciliationScore === 100 
+                                          ? "Tất cả giao dịch kho đã có HĐ."
+                                          : "Có chênh lệch cần rà soát."}
+                                      </p>
+                                    </div>
+                                    <div className="relative z-10 pt-6 sm:pt-8 mt-6 sm:mt-8 border-t border-white/5">
+                                      <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                          <p className="text-[8px] font-bold text-white/30 uppercase tracking-widest leading-none mb-1 text-center md:text-left">Thực Xuất</p>
+                                          <p className="text-base sm:text-lg font-bold text-center md:text-left">{formatNumber(reconciliationData.reduce((a, b) => a + b.exportQty, 0))}</p>
+                                        </div>
+                                        <div className="text-right">
+                                          <p className="text-[8px] font-bold text-white/30 uppercase tracking-widest leading-none mb-1 text-center md:text-right">Hóa Đơn</p>
+                                          <p className="text-base sm:text-lg font-bold text-primary text-center md:text-right">{formatNumber(reconciliationData.reduce((a, b) => a + b.revenueQty, 0))}</p>
+                                        </div>
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8 py-4 border-y border-slate-100">
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sản phẩm Chủ lực (Revenue Rank #1)</p>
-                                      <p className="font-bold text-slate-800">
-                                        {filteredRevenueByTime.length > 0 ? Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                          acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
-                                          return acc;
-                                        }, {})).sort((a: any, b: any) => b[1] - a[1])[0][0] : '—'}
-                                      </p>
+
+                                  {/* Details Area */}
+                                  <div className="md:col-span-8 p-8 bg-white">
+                                    <div className="flex items-center justify-between mb-8">
+                                      <h4 className="text-lg font-bold text-slate-800 tracking-tight">Đối soát sản lượng</h4>
+                                      <div className="flex gap-2">
+                                        <div className="px-2.5 py-1 bg-slate-50 text-slate-400 text-[9px] font-bold uppercase rounded-lg border border-slate-100">Dữ liệu FIFO</div>
+                                      </div>
                                     </div>
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Đối tác Trọng tâm (Top Purchase)</p>
-                                      <p className="font-bold text-slate-800">
-                                        {filteredRevenueByTime.length > 0 ? Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                          acc[curr.partnerName] = (acc[curr.partnerName] || 0) + curr.totalAmount;
-                                          return acc;
-                                        }, {})).sort((a: any, b: any) => b[1] - a[1])[0][0] : '—'}
-                                      </p>
-                                    </div>
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hiệu suất Đơn hàng (AOV)</p>
-                                      <p className="font-bold text-primary">
-                                        {formatNumber(Math.round(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0) / (filteredRevenueByTime.length || 1)))} <span className="text-[10px]">VNĐ</span>
-                                      </p>
+
+                                    <div className="space-y-5 max-h-[300px] overflow-y-auto pr-4 scrollbar-thin scrollbar-thumb-slate-100">
+                                      {reconciliationData.length > 0 ? reconciliationData.map((item) => (
+                                        <div key={item.productId} className="group/item">
+                                          <div className="flex justify-between items-end mb-1.5">
+                                            <div>
+                                              <p className="text-xs font-bold text-slate-700">{item.productName}</p>
+                                              <p className="text-[9px] font-medium text-slate-400 uppercase tracking-tight">{item.category} • {item.unit}</p>
+                                            </div>
+                                            <div className="text-right">
+                                              <span className={cn(
+                                                "text-[11px] font-bold",
+                                                item.diff > 0 ? "text-rose-500" : item.diff < 0 ? "text-blue-500" : "text-emerald-500"
+                                              )}>
+                                                {item.diff === 0 ? 'KHỚP' : (item.diff > 0 ? `+${formatNumber(item.diff)}` : formatNumber(item.diff))}
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <div className="h-1.5 w-full bg-slate-50 rounded-full overflow-hidden flex">
+                                            <motion.div 
+                                              initial={{ width: 0 }}
+                                              animate={{ width: `${item.matchPercentage}%` }}
+                                              className={cn("h-full", item.diff === 0 ? "bg-emerald-400" : "bg-primary")}
+                                            />
+                                          </div>
+                                        </div>
+                                      )) : (
+                                        <div className="h-full flex flex-col items-center justify-center text-slate-200 py-12">
+                                          <PackageSearch className="w-10 h-10 mb-4 opacity-10" />
+                                          <p className="text-xs font-bold uppercase tracking-widest">Không có dữ liệu</p>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
-                                  <p className="text-sm text-slate-600 leading-relaxed italic">
-                                    "Báo cáo ghi nhận tổng cộng <span className="font-bold text-slate-900">{filteredRevenueByTime.length} giao dịch</span> trong kỳ. 
-                                    Dòng sản phẩm <span className="font-bold text-primary">Lít</span> vẫn là mảng đóng góp doanh thu chính. 
-                                    Cần lưu ý nhóm đối tác có tần suất mua lớn để triển khai các chính sách ưu đãi khách hàng thân thiết."
-                                  </p>
                                 </div>
                               </Card>
                             </div>
                             
                             <div className="flex flex-col gap-4">
+                              <Card className="flex-1 bg-slate-900 border-none p-6 text-white flex flex-col justify-between">
+                                <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Tổng lượng</p>
+                                <div>
+                                  <h4 className="text-3xl font-black text-emerald-400">-{formatNumber(reconciliationData.reduce((a, b) => a + b.exportQty, 0))}</h4>
+                                  <p className="text-[9px] font-bold text-white/30 uppercase mt-1 tracking-widest">Đang đi đường & Đã giao</p>
+                                </div>
+                              </Card>
                               <button 
                                 onClick={() => {
                                   if (window.confirm('Bạn có chắc chắn muốn xóa bản báo cáo doanh thu hiện tại không?')) {
                                     setRevenueData([]);
                                   }
                                 }}
-                                className="w-full h-full bg-rose-50 border border-rose-100 rounded-2xl flex flex-col items-center justify-center p-6 group hover:bg-rose-600 transition-all duration-300"
+                                className="w-full bg-rose-50 border border-rose-100 rounded-2xl flex flex-col items-center justify-center p-4 group hover:bg-rose-600 transition-all duration-300"
                               >
-                                <Trash2 className="w-8 h-8 text-rose-500 group-hover:text-white mb-2 transition-colors" />
-                                <p className="text-[10px] font-black uppercase tracking-widest text-rose-600 group-hover:text-white transition-colors">Làm mới Báo cáo</p>
+                                <Trash2 className="w-6 h-6 text-rose-500 group-hover:text-white mb-1 transition-colors" />
+                                <p className="text-[9px] font-black uppercase tracking-widest text-rose-600 group-hover:text-white transition-colors">Làm mới Báo cáo</p>
                               </button>
                             </div>
                           </div>
@@ -3117,53 +3371,128 @@ export default function App() {
                             </Card>
                           </div>
 
-                          <Card title="Sổ chi tiết giao dịch từ Báo cáo" noPadding className="premium-shadow overflow-hidden">
-                            <div className="overflow-x-auto">
-                              <table className="w-full text-left">
-                                <thead>
-                                  <tr className="bg-slate-50 border-b border-slate-100">
-                                    <th className="py-3 sm:py-5 px-4 sm:px-8 font-black text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-widest">Ngày</th>
-                                    <th className="py-3 sm:py-5 px-3 sm:px-6 font-black text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-widest">Sản phẩm</th>
-                                    <th className="py-3 sm:py-5 px-3 sm:px-6 font-black text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-widest">Đối tác</th>
-                                    <th className="py-3 sm:py-5 px-3 sm:px-6 font-black text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-widest text-right">SL</th>
-                                    <th className="py-3 sm:py-5 px-4 sm:px-8 font-black text-[9px] sm:text-[10px] text-slate-400 uppercase tracking-widest text-right">Doanh thu</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {filteredRevenueByTime.map((row) => (
-                                    <tr key={row.id} className="hover:bg-slate-50/80 transition-all group">
-                                      <td className="py-3 sm:py-5 px-4 sm:px-8 text-[9px] sm:text-[11px] font-mono font-bold text-slate-500 whitespace-nowrap">
-                                        {formatDisplayDate(row.date)}
-                                        {row.invoiceNumber && <div className="text-[8px] text-primary/70 mt-0.5 sm:mt-1 font-black">SỐ: {row.invoiceNumber}</div>}
-                                      </td>
-                                      <td className="py-3 sm:py-5 px-3 sm:px-6">
-                                        <div className="font-bold text-slate-900 text-[11px] sm:text-sm leading-tight group-hover:text-primary transition-colors">{row.productName}</div>
-                                        <div className="text-[8px] sm:text-[10px] text-slate-400 font-bold mt-0.5 sm:mt-1 uppercase tracking-tighter truncate max-w-[100px] sm:max-w-none">
-                                          {row.materialCode ? `MÃ: ${row.materialCode}` : 'Dịch vụ'}
+                          {/* Sổ chi tiết - Chế độ ẩn khi lọc "Tất cả" */}
+                          {timeFilter !== 'all' && (
+                            <div className="space-y-4 pt-12 border-t border-slate-100">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                                <h4 className="text-xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+                                  <FileText className="w-5 h-5 text-primary" />
+                                  Sổ chi tiết giao dịch từ Báo cáo
+                                </h4>
+                                
+                                <div className="relative group flex-1 max-w-sm">
+                                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-primary transition-colors" />
+                                  <input 
+                                    type="text" 
+                                    placeholder="Tìm kiếm đối tác / Đại lý..." 
+                                    className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-100 rounded-xl text-sm font-bold placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
+                                    value={revenuePartnerSearch}
+                                    onChange={(e) => setRevenuePartnerSearch(e.target.value)}
+                                  />
+                                  {revenuePartnerSearch && (
+                                    <button 
+                                      onClick={() => setRevenuePartnerSearch('')}
+                                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+                                    >
+                                      <X className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="space-y-3">
+                                {groupedRevenue.length > 0 ? groupedRevenue.map((invoice) => {
+                                  const isExpanded = expandedInvoices.includes(invoice.invoiceNumber);
+                                  return (
+                                    <div key={invoice.invoiceNumber} className="group">
+                                      <div 
+                                        className={cn(
+                                          "bg-white border rounded-2xl p-4 sm:p-5 transition-all duration-300 cursor-pointer relative z-10",
+                                          isExpanded ? "border-primary shadow-xl shadow-primary/5" : "border-slate-100 hover:border-primary/20 hover:shadow-md"
+                                        )}
+                                        onClick={() => {
+                                          if (invoice.invoiceNumber === 'N/A') return;
+                                          setExpandedInvoices(prev => 
+                                            prev.includes(invoice.invoiceNumber) ? prev.filter(n => n !== invoice.invoiceNumber) : [...prev, invoice.invoiceNumber]
+                                          );
+                                        }}
+                                      >
+                                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                          <div className="flex items-center gap-3 sm:gap-4">
+                                            <div className={cn(
+                                              "w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center transition-all",
+                                              isExpanded ? "bg-primary text-white" : "bg-slate-50 text-slate-400 group-hover:bg-primary/5 group-hover:text-primary"
+                                            )}>
+                                              <FileText className="w-5 h-5" />
+                                            </div>
+                                            <div>
+                                              <div className="flex items-center gap-2 mb-0.5">
+                                                <p className="text-[9px] sm:text-[10px] font-bold text-slate-400 uppercase tracking-widest">{formatDisplayDate(invoice.date)}</p>
+                                                {invoice.invoiceNumber !== 'N/A' && (
+                                                  <span className="w-0.5 h-0.5 bg-slate-200 rounded-full" />
+                                                )}
+                                                <span className="text-[8px] sm:text-[9px] font-bold text-primary/60 uppercase tracking-widest">{invoice.items.length} MẶT HÀNG</span>
+                                              </div>
+                                              <h5 className="text-[12px] sm:text-[13px] font-bold text-slate-800 tracking-tight group-hover:text-primary transition-colors italic">Số HĐ: <span className="not-italic">{invoice.invoiceNumber}</span></h5>
+                                            </div>
+                                          </div>
+
+                                          <div className="grid grid-cols-2 md:flex items-center md:justify-end gap-x-4 gap-y-2 md:gap-8 w-full md:w-auto px-4 py-3 md:p-0 bg-slate-50/50 md:bg-transparent rounded-xl border border-slate-100 md:border-none">
+                                            <div className="text-left md:text-right">
+                                              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 leading-none">Đối tác</p>
+                                              <p className="text-[10px] sm:text-[11px] font-bold text-slate-600 uppercase truncate max-w-[120px] sm:max-w-none">{invoice.partnerName}</p>
+                                            </div>
+                                            <div className="text-right">
+                                              <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5 leading-none">Doanh Thu</p>
+                                              <p className="text-base sm:text-lg font-bold text-slate-900 leading-none">{formatNumber(invoice.totalAmount)}<span className="text-[9px] font-medium ml-0.5">đ</span></p>
+                                            </div>
+                                            {invoice.invoiceNumber !== 'N/A' && (
+                                              <div className={cn(
+                                                "col-span-2 md:col-span-1 flex w-full md:w-7 h-5 md:h-7 rounded-lg md:rounded-full bg-slate-100 md:bg-slate-50 items-center justify-center transition-all mt-1 md:mt-0",
+                                                isExpanded ? "bg-primary/10 text-primary md:rotate-180" : "text-slate-300"
+                                              )}>
+                                                <ChevronDown className={cn("w-4 h-4 transition-transform", isExpanded && "rotate-180 md:rotate-0")} />
+                                                <span className="md:hidden text-[8px] font-black uppercase tracking-[0.2em] ml-1">{isExpanded ? 'Thu gọn' : 'Xem chi tiết'}</span>
+                                              </div>
+                                            )}
+                                          </div>
                                         </div>
-                                      </td>
-                                      <td className="py-3 sm:py-5 px-3 sm:px-6">
-                                        <div className="flex flex-col items-start gap-1">
-                                          <span className={cn(
-                                            "px-2 py-0.5 border rounded-full text-[8px] sm:text-[10px] font-black uppercase tracking-tighter transition-all truncate max-w-[100px] sm:max-w-none",
-                                            row.partnerId ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-sm shadow-emerald-100" : "bg-white border-slate-200 text-slate-700"
-                                          )}>
-                                            {row.partnerName}
-                                          </span>
-                                        </div>
-                                      </td>
-                                      <td className="py-3 sm:py-5 px-3 sm:px-6 text-right font-mono text-[10px] sm:text-xs font-bold text-slate-600 whitespace-nowrap">
-                                        {formatNumber(row.quantity)}
-                                      </td>
-                                      <td className="py-3 sm:py-5 px-4 sm:px-8 text-right font-black text-xs sm:text-sm text-slate-900 whitespace-nowrap">
-                                        {formatNumber(row.totalAmount)}
-                                      </td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                                      </div>
+
+                                      {/* Nested Detail View */}
+                                      {isExpanded && (
+                                        <motion.div 
+                                          initial={{ height: 0, opacity: 0 }}
+                                          animate={{ height: 'auto', opacity: 1 }}
+                                          className="relative -mt-4 pt-8 pb-4 px-8 bg-slate-50/50 border-x border-b border-slate-100/60 rounded-b-2xl z-0 overflow-hidden"
+                                        >
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                            {invoice.items.map((item, idx) => (
+                                              <div key={idx} className="bg-white border border-slate-100 p-4 rounded-xl flex items-start justify-between shadow-sm">
+                                                <div className="space-y-0.5">
+                                                  <p className="text-[10px] font-bold text-slate-700 line-clamp-1">{item.productName}</p>
+                                                  <p className="text-[9px] font-medium text-slate-400">MÃ: {item.materialCode || 'N/A'}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                  <p className="text-[10px] font-bold text-slate-900">{formatNumber(item.quantity)} {item.unit || products.find(p => p.name === item.productName)?.unit || 'ĐV'}</p>
+                                                  <p className="text-[9px] font-bold text-emerald-600">{formatNumber(item.totalAmount)} đ</p>
+                                                </div>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </motion.div>
+                                      )}
+                                    </div>
+                                  );
+                                }) : (
+                                  <div className="py-20 text-center">
+                                    <Search className="w-10 h-10 text-slate-100 mx-auto mb-4" />
+                                    <p className="text-xs font-bold text-slate-300 uppercase tracking-widest">Không có dữ liệu hóa đơn</p>
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          </Card>
+                          )}
                         </>
                       ) : (
                         <Card className="py-32 flex flex-col items-center justify-center text-center space-y-4 border-dashed border-2 bg-slate-50/50 rounded-[32px]">
@@ -3430,7 +3759,14 @@ export default function App() {
                               { value: 'OPENING', label: 'Tồn đầu kỳ (Số liệu gốc ban đầu)' }
                             ]}
                             value={newTransaction.type}
-                            onChange={(e: any) => setNewTransaction({ ...newTransaction, type: e.target.value as TransactionType })}
+                            onChange={(e: any) => {
+                              const type = e.target.value as TransactionType;
+                              setNewTransaction({ 
+                                ...newTransaction, 
+                                type,
+                                batchNumber: type === 'OPENING' ? 'Tồn 25/4' : (newTransaction.batchNumber === 'Tồn 25/4' ? '' : newTransaction.batchNumber)
+                              });
+                            }}
                           />
                           <p className="mt-2 text-[10px] text-slate-400 italic">
                             * Tồn đầu kỳ sẽ được dùng làm căn bản để tính toán báo cáo lưu chuyển.
@@ -3474,11 +3810,11 @@ export default function App() {
                               />
                             )}
                           </div>
-                          {activeTab === 'import' && (
+                          {(activeTab === 'import' || newTransaction.type === 'OPENING') && (
                             <div className="md:col-span-2">
                               <Input 
                                 label="Số lô (Mã lô nhập)"
-                                placeholder="LO-2024-001"
+                                placeholder="Ví dụ: Tồn 25/4 hoặc LOT-001"
                                 value={newTransaction.batchNumber}
                                 onChange={(e: any) => setNewTransaction({ ...newTransaction, batchNumber: e.target.value })}
                               />
