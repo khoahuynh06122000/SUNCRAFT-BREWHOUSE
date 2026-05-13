@@ -1090,27 +1090,51 @@ export default function App() {
   };
 
   // Form states
-  const [newTransaction, setNewTransaction] = useState<{
+  interface TransactionItem {
     productId: string;
     quantity: number;
+    batchNumber: string;
+  }
+
+  const [newTransaction, setNewTransaction] = useState<{
     type: TransactionType;
     partnerId: string;
     notes: string;
-    batchNumber: string;
     evidencePhotoUrl: string;
-    date?: string;
-    isInTransit?: boolean;
+    date: string;
+    isInTransit: boolean;
+    items: TransactionItem[];
   }>({
-    productId: products[0]?.id || '',
-    quantity: 0,
     type: 'IN',
     partnerId: partners[0]?.id || '',
     notes: '',
-    batchNumber: '',
     evidencePhotoUrl: '',
     date: format(new Date(), 'yyyy-MM-dd'),
-    isInTransit: false
+    isInTransit: false,
+    items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
   });
+
+  const addTransactionItem = () => {
+    setNewTransaction(prev => ({
+      ...prev,
+      items: [...prev.items, { productId: products[0]?.id || '', quantity: 0, batchNumber: prev.type === 'OPENING' ? 'Tồn 25/4' : '' }]
+    }));
+  };
+
+  const removeTransactionItem = (index: number) => {
+    if (newTransaction.items.length <= 1) return;
+    setNewTransaction(prev => ({
+      ...prev,
+      items: prev.items.filter((_, i) => i !== index)
+    }));
+  };
+
+  const updateTransactionItem = (index: number, updates: Partial<TransactionItem>) => {
+    setNewTransaction(prev => ({
+      ...prev,
+      items: prev.items.map((item, i) => i === index ? { ...item, ...updates } : item)
+    }));
+  };
 
   const [selectedInTransit, setSelectedInTransit] = useState<Transaction | null>(null);
   const [actualReceivedQty, setActualReceivedQty] = useState<number>(0);
@@ -1398,25 +1422,34 @@ export default function App() {
     );
   }, [transactions, products]);
 
-  // Auto-select FIFO batch for export
+  // Auto-fill batch for newest product if exporting
   useEffect(() => {
-    if (activeTab === 'export' && newTransaction.productId) {
-      const oldestBatch = batches.find(b => b.productId === newTransaction.productId && b.stock > 0);
-      if (oldestBatch && oldestBatch.batchNumber !== newTransaction.batchNumber) {
-        setNewTransaction(prev => ({ ...prev, batchNumber: oldestBatch.batchNumber }));
+    if (activeTab === 'export') {
+      const updatedItems = newTransaction.items.map(item => {
+        if (!item.productId) return item;
+        const oldestBatch = batches.find(b => b.productId === item.productId && b.stock > 0);
+        if (oldestBatch && oldestBatch.batchNumber !== item.batchNumber) {
+          return { ...item, batchNumber: oldestBatch.batchNumber };
+        }
+        return item;
+      });
+      
+      const changed = updatedItems.some((item, i) => item.batchNumber !== newTransaction.items[i].batchNumber);
+      if (changed) {
+        setNewTransaction(prev => ({ ...prev, items: updatedItems }));
       }
     }
-  }, [activeTab, newTransaction.productId, batches, newTransaction.batchNumber]);
+  }, [activeTab, newTransaction.items, batches]);
 
   // Default supplier for import
   useEffect(() => {
     if (activeTab === 'import') {
       const skb = partners.find(p => p.id === 'SKB-BNC' || p.name === 'SKB-BNC');
-      if (skb) {
+      if (skb && newTransaction.partnerId !== skb.id) {
         setNewTransaction(prev => ({ ...prev, partnerId: skb.id, type: 'IN' }));
       }
     }
-  }, [activeTab, partners]);
+  }, [activeTab, partners, newTransaction.partnerId]);
 
   const filteredTransactionsForReport = useMemo(() => {
     const bq = batchSearchQuery.toLowerCase().trim();
@@ -1772,110 +1805,128 @@ export default function App() {
   }, [filteredTransactionsByTime, filteredRevenueByTime, products]);
 
   const handleAddTransaction = async (type: TransactionType) => {
-    const p = products.find(prod => prod.id === newTransaction.productId);
     const par = partners.find(partner => partner.id === newTransaction.partnerId);
-
-    // Validation
-    if (!p || (!par && type !== 'OPENING') || newTransaction.quantity <= 0) return;
-
-    if (type === 'IN' && !newTransaction.batchNumber?.trim()) {
-      alert("Tin Tin từ chối: Anh/Chị bắt buộc phải nhập Mã lô khi thực hiện nhập kho ạ!");
+    
+    // Global Validation
+    if ((!par && type !== 'OPENING')) {
+      alert("Vui lòng chọn đối tác!");
       return;
     }
 
-    // For OUT transactions, apply FIFO allocation
-    if (type === 'OUT') {
-      const currentItem = inventory.find(i => i.productId === newTransaction.productId);
-      if (!currentItem || currentItem.stock < newTransaction.quantity) {
-        alert('Số lượng tồn không đủ trong kho!');
+    // Items Validation
+    const validItems = newTransaction.items.filter(item => item.productId && item.quantity > 0);
+    if (validItems.length === 0) {
+      alert("Vui lòng chọn ít nhất một sản phẩm với số lượng hợp lệ!");
+      return;
+    }
+
+    if (type === 'IN') {
+      const missingBatch = validItems.find(item => !item.batchNumber?.trim());
+      if (missingBatch) {
+        alert("Tin Tin từ chối: Anh/Chị bắt buộc phải nhập Mã lô cho tất cả mặt hàng khi thực hiện nhập kho ạ!");
         return;
       }
+    }
 
-      // Clone batches for local calculation
-      const currentBatches = [...batches];
-      const allocations = getFIFOAllocations(p.id, Number(newTransaction.quantity), currentBatches);
+    if (type === 'OUT') {
+      for (const item of validItems) {
+        const currentItem = inventory.find(i => i.productId === item.productId);
+        if (!currentItem || currentItem.stock < item.quantity) {
+          alert(`Sản phẩm "${products.find(p => p.id === item.productId)?.name}" không đủ số lượng trong kho!`);
+          return;
+        }
+      }
+    }
 
-      try {
-        setLoading(true);
-        const referenceGroupId = `group-${Date.now()}`;
-        for (let i = 0; i < allocations.length; i++) {
-          const alloc = allocations[i];
-          const transactionId = `split-${Date.now()}-${i}`;
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+      const referenceGroupId = `multi-${Date.now()}`;
+      const timestamp = new Date().toISOString();
+      const transactionDate = newTransaction.date 
+        ? (newTransaction.date.includes('T') ? newTransaction.date : `${newTransaction.date}T${timestamp.split('T')[1]}`)
+        : timestamp;
+
+      // Local copy of batches to handle multiple items in one go
+      let currentBatchesLocal = batches.map(b => ({ ...b }));
+
+      for (const item of validItems) {
+        const p = products.find(prod => prod.id === item.productId);
+        if (!p) continue;
+
+        if (type === 'OUT') {
+          const allocations = getFIFOAllocations(p.id, Number(item.quantity), currentBatchesLocal);
+          
+          for (let i = 0; i < allocations.length; i++) {
+            const alloc = allocations[i];
+            const transactionId = `split-${Date.now()}-${item.productId}-${i}`;
+            const transaction: Transaction = {
+              id: transactionId,
+              date: transactionDate,
+              type: 'OUT',
+              productId: p.id,
+              productName: p.name,
+              category: p.category,
+              quantity: alloc.quantity,
+              partnerId: par?.id || 'UNKNOWN',
+              partnerName: par?.name || 'Vô danh',
+              notes: validItems.length > 1 
+                ? `[Món ${validItems.indexOf(item) + 1}/${validItems.length}] ${allocations.length > 1 ? `[Lô ${i+1}/${allocations.length}] ` : ''}${newTransaction.notes}`
+                : (allocations.length > 1 ? `[Lô ${i+1}/${allocations.length}] ${newTransaction.notes}` : newTransaction.notes),
+              batchNumber: alloc.batchNumber,
+              evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
+              createdBy: userEmail || user || 'Guest',
+              referenceGroupId: referenceGroupId,
+              status: newTransaction.isInTransit ? 'in_transit' : 'completed',
+              originalQuantity: alloc.quantity
+            };
+            batch.set(doc(db, 'transactions', transactionId), transaction);
+          }
+        } else {
+          const transactionId = `trx-${Date.now()}-${item.productId}`;
           const transaction: Transaction = {
             id: transactionId,
-            date: newTransaction.date 
-              ? (newTransaction.date.includes('T') ? newTransaction.date : `${newTransaction.date}T${new Date().toISOString().split('T')[1]}`)
-              : new Date().toISOString(),
-            type: 'OUT',
+            date: transactionDate,
+            type,
             productId: p.id,
             productName: p.name,
             category: p.category,
-            quantity: alloc.quantity,
-            partnerId: par?.id || 'UNKNOWN',
-            partnerName: par?.name || 'Vô danh',
-            notes: allocations.length > 1 ? `[Xuất Lô ${i+1}/${allocations.length}] ${newTransaction.notes}` : newTransaction.notes,
-            batchNumber: alloc.batchNumber,
+            quantity: Number(item.quantity),
+            partnerId: type === 'OPENING' ? 'SYSTEM_BEGINNING' : (par?.id || 'UNKNOWN'),
+            partnerName: type === 'OPENING' ? 'Số dư đầu kỳ' : (par?.name || 'Vô danh'),
+            notes: validItems.length > 1 ? `[Món ${validItems.indexOf(item) + 1}/${validItems.length}] ${newTransaction.notes}` : newTransaction.notes,
+            batchNumber: item.batchNumber || undefined,
             evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
             createdBy: userEmail || user || 'Guest',
-            referenceGroupId: referenceGroupId,
-            status: newTransaction.isInTransit ? 'in_transit' : 'completed',
-            originalQuantity: alloc.quantity
+            referenceGroupId: referenceGroupId
           };
-          await setDoc(doc(db, 'transactions', transactionId), transaction);
+          batch.set(doc(db, 'transactions', transactionId), transaction);
         }
-        const inTransit = newTransaction.isInTransit;
-        setNewTransaction({ 
-          ...newTransaction, 
-          quantity: 0, 
-          notes: '', 
-          batchNumber: newTransaction.type === 'OPENING' ? 'Tồn 25/4' : '', 
-          evidencePhotoUrl: '', 
-          isInTransit: false 
-        });
-        setActiveTab(inTransit ? 'in-transit' : 'history');
-        alert(inTransit ? 'Đã ghi nhận đơn hàng đi đường (đang vận chuyển).' : 'Đã cập nhật giao dịch xuất kho FIFO thành công.');
-      } catch (err) {
-        handleFirestoreError(err, OperationType.WRITE, 'transactions');
-      } finally {
-        setLoading(false);
       }
-      return;
-    }
 
-    const transactionId = `trx-${Date.now()}`;
-    const transaction: Transaction = {
-      id: transactionId,
-      date: newTransaction.date 
-        ? (newTransaction.date.includes('T') ? newTransaction.date : `${newTransaction.date}T${new Date().toISOString().split('T')[1]}`)
-        : new Date().toISOString(),
-      type,
-      productId: p.id,
-      productName: p.name,
-      category: p.category,
-      quantity: Number(newTransaction.quantity),
-      partnerId: type === 'OPENING' ? 'SYSTEM_BEGINNING' : (par?.id || 'UNKNOWN'),
-      partnerName: type === 'OPENING' ? 'Số dư đầu kỳ' : (par?.name || 'Vô danh'),
-      notes: newTransaction.notes,
-      batchNumber: newTransaction.batchNumber || undefined,
-      evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
-      createdBy: userEmail || user || 'Guest',
-    };
-
-    try {
-      await setDoc(doc(db, 'transactions', transactionId), transaction);
+      await batch.commit();
+      
+      const inTransit = newTransaction.isInTransit;
       setNewTransaction({ 
-        ...newTransaction, 
-        quantity: 0, 
-        notes: '', 
-        batchNumber: newTransaction.type === 'OPENING' ? 'Tồn 25/4' : '', 
-        evidencePhotoUrl: '' 
+        type: 'IN',
+        partnerId: partners[0]?.id || '',
+        notes: '',
+        evidencePhotoUrl: '',
+        date: format(new Date(), 'yyyy-MM-dd'),
+        isInTransit: false,
+        items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
       });
-      setActiveTab('history');
-      alert('Đã cập nhật giao dịch lên Cloud thành công.');
+      
+      setActiveTab(inTransit ? 'in-transit' : 'history');
+      alert(`Đã cập nhật ${validItems.length} mặt hàng thành công!`);
     } catch (err) {
-      handleFirestoreError(err, OperationType.WRITE, `transactions/${transactionId}`);
+      console.error(err);
+      alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!');
+    } finally {
+      setLoading(false);
     }
   };
+
 
   const handleDeleteAllTransactions = async () => {
     if (!isOwner) {
@@ -3962,25 +4013,24 @@ export default function App() {
               )}
 
               {(activeTab === 'import' || activeTab === 'export') && (
-                <div className="max-w-2xl mx-auto space-y-6">
+                <div className="max-w-4xl mx-auto space-y-6">
                   <div className="text-center space-y-2 mb-8">
                     <div className={cn(
-                      "w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4",
-                      activeTab === 'import' ? "bg-blue-600 shadow-blue-200" : "bg-rose-600 shadow-rose-200",
-                      "shadow-xl"
+                      "w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4 transition-all duration-500 hover:rotate-6 shadow-xl",
+                      activeTab === 'import' ? "bg-blue-600 shadow-blue-200" : "bg-rose-600 shadow-rose-200"
                     )}>
                       {activeTab === 'import' ? <PlusCircle className="text-white w-8 h-8" /> : <MinusCircle className="text-white w-8 h-8" />}
                     </div>
-                    <h2 className="text-2xl font-bold text-gray-900">
-                      Ghi nhận {activeTab === 'import' 
-                        ? (newTransaction.type === 'OPENING' ? 'Số dư đầu kỳ' : 'Nhập kho') 
-                        : 'Xuất kho'}
+                    <h2 className="text-2xl font-black text-slate-900 italic font-serif">
+                      GHI NHẬN {activeTab === 'import' 
+                        ? (newTransaction.type === 'OPENING' ? 'TỒN ĐẦU KỲ' : 'NHẬP KHO') 
+                        : 'XUẤT KHO'}
                     </h2>
-                    <p className="text-sm text-gray-500">Nhập đầy đủ thông tin để ghi lại giao dịch vào hệ thống.</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">Hệ thống ghi nhận đa mặt hàng (Batch Processing)</p>
                   </div>
 
-                  <Card className="p-8">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <Card className="p-4 sm:p-10 relative overflow-hidden">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 relative z-10">
                       {activeTab === 'import' && (
                         <div className="md:col-span-2">
                           <Select 
@@ -3995,19 +4045,20 @@ export default function App() {
                               setNewTransaction({ 
                                 ...newTransaction, 
                                 type,
-                                batchNumber: type === 'OPENING' ? 'Tồn 25/4' : (newTransaction.batchNumber === 'Tồn 25/4' ? '' : newTransaction.batchNumber)
+                                items: newTransaction.items.map(item => ({
+                                  ...item,
+                                  batchNumber: type === 'OPENING' ? 'Tồn 25/4' : (item.batchNumber === 'Tồn 25/4' ? '' : item.batchNumber)
+                                }))
                               });
                             }}
                           />
-                          <p className="mt-2 text-[10px] text-slate-400 italic">
-                            * Tồn đầu kỳ sẽ được dùng làm căn bản để tính toán báo cáo lưu chuyển.
-                          </p>
                         </div>
                       )}
-                      <div className="md:col-span-2">
+                      
+                      <div className="md:col-span-1">
                         <Input 
                           label={activeTab === 'import' 
-                            ? (newTransaction.type === 'OPENING' ? 'Ngày chốt tồn đầu kỳ' : 'Ngày thực nhập') 
+                            ? (newTransaction.type === 'OPENING' ? 'Ngày chốt tồn đầu' : 'Ngày thực nhập') 
                             : 'Ngày thực xuất'
                           }
                           type="date"
@@ -4015,46 +4066,96 @@ export default function App() {
                           onChange={(e: any) => setNewTransaction({ ...newTransaction, date: e.target.value })}
                         />
                       </div>
-                      <Select 
-                        label="Sản phẩm"
-                        options={products.map(p => ({ value: p.id, label: `${p.name} (${p.category})` }))}
-                            value={newTransaction.productId}
-                            onChange={(e: any) => setNewTransaction({ ...newTransaction, productId: e.target.value })}
+
+                      <div className="md:col-span-1">
+                        {newTransaction.type !== 'OPENING' && (
+                          <Select 
+                            label={activeTab === 'import' ? "Nhà cung cấp" : "Đơn vị nhận (Đối tác)"}
+                            options={partners
+                              .filter(p => activeTab === 'import' ? p.type === 'SUPPLIER' : p.type !== 'SUPPLIER')
+                              .map(p => ({ value: p.id, label: `${p.name} ${p.sapCode ? '[' + p.sapCode + ']' : ''}` }))
+                            }
+                            value={newTransaction.partnerId}
+                            onChange={(e: any) => setNewTransaction({ ...newTransaction, partnerId: e.target.value })}
                           />
-                          <Input 
-                            label={`Số lượng (${products.find(p => p.id === newTransaction.productId)?.unit})`}
-                            type="number"
-                            placeholder="0"
-                            value={newTransaction.quantity}
-                            onChange={(e: any) => setNewTransaction({ ...newTransaction, quantity: e.target.value })}
-                          />
-                          <div className="md:col-span-2">
-                            {newTransaction.type !== 'OPENING' && (
-                              <Select 
-                                label={activeTab === 'import' ? "Nhà cung cấp" : "Đơn vị nhận (Đối tác)"}
-                                options={partners
-                                  .filter(p => activeTab === 'import' ? p.type === 'SUPPLIER' : p.type !== 'SUPPLIER')
-                                  .map(p => ({ value: p.id, label: `${p.name} ${p.sapCode ? '[' + p.sapCode + ']' : ''} ${p.phone ? '(' + p.phone + ')' : ''}` }))
-                                }
-                                value={newTransaction.partnerId}
-                                onChange={(e: any) => setNewTransaction({ ...newTransaction, partnerId: e.target.value })}
-                              />
-                            )}
-                          </div>
-                          {(activeTab === 'import' || newTransaction.type === 'OPENING') && (
-                            <div className="md:col-span-2">
-                              <Input 
-                                label="Số lô (Mã lô nhập)"
-                                placeholder="Ví dụ: Tồn 25/4 hoặc LOT-001"
-                                value={newTransaction.batchNumber}
-                                onChange={(e: any) => setNewTransaction({ ...newTransaction, batchNumber: e.target.value })}
-                              />
-                            </div>
-                          )}
+                        )}
+                      </div>
+
+                      {/* Items List */}
+                      <div className="md:col-span-2 mt-4">
+                        <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
+                          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Danh sách mặt hàng ({newTransaction.items.length})</h4>
+                          <button 
+                            onClick={addTransactionItem}
+                            className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-1.5 hover:bg-primary/5 px-3 py-1.5 rounded-lg transition-all"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5" /> Thêm mặt hàng
+                          </button>
+                        </div>
+
+                        <div className="space-y-4">
+                          <AnimatePresence initial={false}>
+                            {newTransaction.items.map((item, index) => (
+                              <motion.div 
+                                key={index}
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: 'auto' }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="p-4 sm:p-6 bg-slate-50/50 rounded-2xl border border-dotted border-slate-200 relative group/item"
+                              >
+                                {newTransaction.items.length > 1 && (
+                                  <button 
+                                    onClick={() => removeTransactionItem(index)}
+                                    className="absolute -top-2 -right-2 w-7 h-7 bg-white border border-slate-100 text-rose-500 rounded-full flex items-center justify-center shadow-sm opacity-0 group-hover/item:opacity-100 transition-all hover:bg-rose-50"
+                                  >
+                                    <X className="w-4 h-4" />
+                                  </button>
+                                )}
+                                
+                                <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-end">
+                                  <div className="sm:col-span-5">
+                                    <Select 
+                                      label={`Sản phẩm ${index + 1}`}
+                                      options={products.map(p => ({ value: p.id, label: `${p.name} (${p.category})` }))}
+                                      value={item.productId}
+                                      onChange={(e: any) => updateTransactionItem(index, { productId: e.target.value })}
+                                    />
+                                  </div>
+                                  <div className="sm:col-span-3">
+                                    <Input 
+                                      label={`Số lượng (${products.find(p => p.id === item.productId)?.unit || '—'})`}
+                                      type="number"
+                                      placeholder="0"
+                                      value={item.quantity === 0 ? '' : item.quantity}
+                                      onChange={(e: any) => updateTransactionItem(index, { quantity: Number(e.target.value) })}
+                                    />
+                                  </div>
+                                  <div className="sm:col-span-4">
+                                    {(activeTab === 'import' || newTransaction.type === 'OPENING') && (
+                                      <Input 
+                                        label="Số lô (Mã lô nhập)"
+                                        placeholder="LOT-XXX"
+                                        value={item.batchNumber}
+                                        onChange={(e: any) => updateTransactionItem(index, { batchNumber: e.target.value })}
+                                      />
+                                    )}
+                                    {activeTab === 'export' && (
+                                      <div className="text-[10px] font-mono font-black text-rose-500 bg-rose-50/50 px-3 py-3.5 rounded-xl border border-rose-100">
+                                        FIFO: {item.batchNumber || 'TỰ ĐỘNG'}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </motion.div>
+                            ))}
+                          </AnimatePresence>
+                        </div>
+                      </div>
+
                       <div className="md:col-span-2">
                         <Input 
-                          label="Ghi chú (Tùy chọn)"
-                          placeholder="Nhập ghi chú thêm..."
+                          label="Ghi chú tổng quát (Tùy chọn)"
+                          placeholder="Ví dụ: Theo xe tải số hiệu..., Ghi chú chung cho cả đơn..."
                           value={newTransaction.notes}
                           onChange={(e: any) => setNewTransaction({ ...newTransaction, notes: e.target.value })}
                         />
@@ -4062,7 +4163,7 @@ export default function App() {
 
                       {activeTab === 'export' && (
                         <div className="md:col-span-2">
-                          <label className="flex items-center gap-3 cursor-pointer p-4 bg-amber-50 border border-amber-200 rounded-2xl hover:bg-amber-100 transition-all">
+                          <label className="flex items-center gap-3 cursor-pointer p-5 bg-amber-50/50 border border-amber-200/50 rounded-2xl hover:bg-amber-100/50 transition-all">
                             <input 
                               type="checkbox" 
                               className="w-5 h-5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
@@ -4070,106 +4171,99 @@ export default function App() {
                               onChange={(e) => setNewTransaction({ ...newTransaction, isInTransit: e.target.checked })}
                             />
                             <div className="flex flex-col">
-                              <span className="text-sm font-black text-amber-900 uppercase">Đơn hàng đi đường (Giao sau)</span>
-                              <span className="text-[10px] text-amber-700 font-bold">Tích chọn nếu hàng chưa đến tay đối tác ngay (cần xác nhận sau 2-3 ngày).</span>
+                              <span className="text-xs font-black text-amber-900 uppercase tracking-widest">Đơn hàng đi đường (Giao sau)</span>
+                              <span className="text-[10px] text-amber-700/70 font-bold">Hàng đang vận chuyển, chưa đến tay đối tác ngay.</span>
                             </div>
-                            <Truck className="w-5 h-5 text-amber-500 ml-auto" />
+                            <Truck className="w-6 h-6 text-amber-500 ml-auto" />
                           </label>
                         </div>
                       )}
 
-                      {(activeTab === 'import' || activeTab === 'export') && (
-                        <div className="md:col-span-2 space-y-3">
-                          <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng (Ảnh chụp / File ảnh)</label>
-                          <div className="flex flex-col gap-4">
+                      <div className="md:col-span-2 space-y-4">
+                        <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng (Ảnh chụp chứng từ cho cả đơn)</label>
+                        <div className="flex flex-col gap-4">
+                          {!newTransaction.evidencePhotoUrl ? (
                             <div className="flex gap-4">
                               <button 
                                 type="button"
-                                onClick={() => document.getElementById('photo-upload')?.click()}
-                                className="flex-1 h-24 sm:h-32 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-primary hover:text-primary hover:bg-primary/5 transition-all group"
+                                onClick={() => document.getElementById('photo-upload-multi')?.click()}
+                                className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-primary hover:text-primary hover:bg-primary/5 transition-all group"
                               >
-                                <ImageIcon className="w-6 h-6 sm:w-8 sm:h-8 group-hover:scale-110 transition-transform" />
-                                <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest">Tải ảnh lên</span>
+                                <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
+                                  <ImageIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                </div>
+                                <span className="text-[10px] font-black uppercase tracking-widest">Tải ảnh lên</span>
                               </button>
                               <button 
                                 type="button"
-                                onClick={() => document.getElementById('camera-capture')?.click()}
-                                className="flex-1 h-24 sm:h-32 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-2 text-slate-400 hover:border-emerald-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all group"
+                                onClick={() => document.getElementById('camera-capture-multi')?.click()}
+                                className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-emerald-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all group"
                               >
-                                <Camera className="w-6 h-6 sm:w-8 sm:h-8 group-hover:scale-110 transition-transform" />
-                                <span className="text-[10px] sm:text-xs font-bold uppercase tracking-widest">Chụp ảnh</span>
+                                <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
+                                  <Camera className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                </div>
+                                <span className="text-[10px] font-black uppercase tracking-widest">Chụp bằng máy ảnh</span>
                               </button>
                             </div>
-                            
-                            <input 
-                              id="photo-upload" 
-                              type="file" 
-                              accept="image/*" 
-                              className="hidden" 
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  const reader = new FileReader();
-                                  reader.onloadend = () => {
-                                    setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
-                                  };
-                                  reader.readAsDataURL(file);
-                                }
-                              }}
-                            />
-                            <input 
-                              id="camera-capture" 
-                              type="file" 
-                              accept="image/*" 
-                              capture="environment" 
-                              className="hidden" 
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  const reader = new FileReader();
-                                  reader.onloadend = () => {
-                                    setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
-                                  };
-                                  reader.readAsDataURL(file);
-                                }
-                              }}
-                            />
-
-                            {newTransaction.evidencePhotoUrl && (
-                              <div className="relative group rounded-2xl overflow-hidden border border-slate-200 shadow-lg">
-                                <img src={newTransaction.evidencePhotoUrl} alt="Preview" className="w-full h-48 object-cover" />
+                          ) : (
+                            <div className="relative group rounded-3xl overflow-hidden border-4 border-white shadow-2xl">
+                              <img src={newTransaction.evidencePhotoUrl} alt="Preview" className="w-full h-64 object-cover" />
+                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-6 flex items-center justify-between">
+                                <span className="text-white text-[10px] font-black uppercase tracking-widest">Biên bản / Chứng từ gốc</span>
                                 <button 
                                   onClick={() => setNewTransaction({ ...newTransaction, evidencePhotoUrl: '' })}
-                                  className="absolute top-2 right-2 w-8 h-8 bg-rose-500 text-white rounded-lg flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
+                                  className="w-10 h-10 bg-rose-500 text-white rounded-xl flex items-center justify-center hover:bg-rose-600 transition-all shadow-lg"
                                 >
-                                  <X className="w-4 h-4" />
+                                  <X className="w-5 h-5" />
                                 </button>
-                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
-                                  <span className="text-white text-[10px] font-black uppercase tracking-[0.2em] bg-black/20 px-3 py-1.5 rounded-lg border border-white/20">Ảnh đã chọn</span>
-                                </div>
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
+                          
+                          <input id="photo-upload-multi" type="file" accept="image/*" className="hidden" 
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onloadend = () => setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
+                          <input id="camera-capture-multi" type="file" accept="image/*" capture="environment" className="hidden" 
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                const reader = new FileReader();
+                                reader.onloadend = () => setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
+                                reader.readAsDataURL(file);
+                              }
+                            }}
+                          />
                         </div>
-                      )}
-                    </div>
-                    
-                    <div className="mt-8 flex flex-col gap-4">
-                      <div className="flex gap-3">
-                        <Button 
-                          variant={activeTab === 'import' ? 'primary' : 'danger'} 
-                          className="flex-1 py-3 text-base shadow-lg hover:shadow-xl translate-y-0 hover:-translate-y-0.5"
-                          onClick={() => handleAddTransaction(activeTab === 'import' ? newTransaction.type : 'OUT')}
-                          disabled={!newTransaction.quantity || newTransaction.quantity <= 0}
-                        >
-                          {activeTab === 'import' ? <PlusCircle className="w-5 h-5" /> : <MinusCircle className="w-5 h-5" />}
-                          Xác nhận {activeTab === 'import' 
-                            ? (newTransaction.type === 'OPENING' ? 'Ghi nhận Tồn đầu' : 'Nhập kho') 
-                            : 'Xuất kho'}
-                        </Button>
-                        <Button variant="secondary" onClick={() => setActiveTab('dashboard')}>Hủy</Button>
                       </div>
                     </div>
+                    
+                    <div className="mt-12 flex flex-col sm:flex-row gap-4 items-center border-t border-slate-100 pt-10">
+                      <Button 
+                        variant={activeTab === 'import' ? 'primary' : 'danger'} 
+                        className="w-full sm:flex-1 py-5 text-base shadow-2xl relative group overflow-hidden"
+                        onClick={() => handleAddTransaction(activeTab === 'import' ? newTransaction.type : 'OUT')}
+                        disabled={loading || newTransaction.items.some(i => !i.productId || i.quantity <= 0)}
+                      >
+                        <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : (activeTab === 'import' ? <PlusCircle className="w-5 h-5" /> : <MinusCircle className="w-5 h-5" />)}
+                        <span className="relative z-10">
+                          {activeTab === 'import' 
+                            ? (newTransaction.type === 'OPENING' ? 'GHI NHẬN TỒN ĐẦU' : `HOÀN TẤT NHẬP ${newTransaction.items.length} MÓN`) 
+                            : `HOÀN TẤT XUẤT ${newTransaction.items.length} MÓN`}
+                        </span>
+                      </Button>
+                      <Button variant="secondary" className="w-full sm:w-auto px-10 py-5" onClick={() => setActiveTab('dashboard')}>Hủy bỏ</Button>
+                    </div>
+
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-slate-50 rounded-full -mr-32 -mt-32 opacity-20 pointer-events-none" />
+                    <div className="absolute bottom-0 left-0 w-48 h-48 bg-slate-50 rounded-full -ml-24 -mb-24 opacity-20 pointer-events-none" />
                   </Card>
                 </div>
               )}
