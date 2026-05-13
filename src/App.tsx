@@ -441,7 +441,7 @@ export default function App() {
     // Sync Transactions
     const qTransactions = query(collection(db, 'transactions'), orderBy('date', 'desc'));
     const unsubTransactions = onSnapshot(qTransactions, (snapshot) => {
-      const data = snapshot.docs.map(doc => doc.data() as Transaction);
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Transaction));
       setTransactions(data.length > 0 ? data : INITIAL_TRANSACTIONS);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'transactions');
@@ -450,7 +450,7 @@ export default function App() {
     // Sync Partners
     const qPartners = query(collection(db, 'partners'));
     const unsubPartners = onSnapshot(qPartners, (snapshot) => {
-      const data = snapshot.docs.map(doc => doc.data() as Partner);
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Partner));
       setPartners(data.length > 0 ? data : INITIAL_PARTNERS);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'partners');
@@ -459,7 +459,7 @@ export default function App() {
     // Sync Revenue
     const qRevenue = query(collection(db, 'revenue'));
     const unsubRevenue = onSnapshot(qRevenue, (snapshot) => {
-      const data = snapshot.docs.map(doc => doc.data() as RevenueRecord);
+      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as RevenueRecord));
       setRevenueData(data);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'revenue');
@@ -544,36 +544,50 @@ export default function App() {
     if (!isOwner) return;
     
     const confirmReset = window.confirm(
-      "CẢNH BÁO: Thao tác này sẽ XÓA SẠCH toàn bộ dữ liệu (Giao dịch, Đối tác, Doanh thu) và không thể hoàn tác.\n\nAnh có chắc chắn muốn làm mới hoàn toàn hệ thống không?"
+      "TIÊU ĐIỂM: Tin sẽ giúp anh làm sạch toàn bộ dữ liệu Giao dịch và Doanh thu.\n\nMục Đối tác và Danh mục sản phẩm sẽ được giữ lại theo yêu cầu của anh.\n\nAnh có chắc chắn muốn dọn dẹp không?"
     );
     
     if (!confirmReset) return;
     
     try {
-      // Clear Transactions
-      const transSnapshot = await getDocFromServer(doc(db, 'transactions', 'test')).catch(() => null); 
-      // Note: We normally need a full query to delete all, but the client SDK doesn't support 
-      // bulk delete easily without fetching. We'll use a simpler approach of mapping current state.
+      setLoading(true);
+      const batch = writeBatch(db);
+      let count = 0;
       
-      const deletePromises: Promise<void>[] = [];
-      
+      // Delete all Transactions
       transactions.forEach(t => {
-        if (t.id) deletePromises.push(deleteDoc(doc(db, 'transactions', t.id)));
+        if (t.id) {
+          batch.delete(doc(db, 'transactions', t.id));
+          count++;
+        }
       });
       
-      partners.forEach(p => {
-        if (p.id) deletePromises.push(deleteDoc(doc(db, 'partners', p.id)));
-      });
-      
+      // Delete all Revenue Data
       revenueData.forEach(r => {
-        if (r.id) deletePromises.push(deleteDoc(doc(db, 'revenue', r.id)));
+        if (r.id) {
+          batch.delete(doc(db, 'revenue', r.id));
+          count++;
+        }
       });
 
-      await Promise.all(deletePromises);
-      alert("Hệ thống đã được dọn sạch thành công! Dữ liệu gốc sẽ tự động tải lại nếu không có dữ liệu mới.");
+      if (count === 0) {
+        alert("Hệ thống hiện tại đã ở trạng thái sạch (không có dữ liệu tùy chỉnh trên database).");
+        setLoading(false);
+        return;
+      }
+
+      await batch.commit();
+      alert("Tin đã dọn dẹp xong " + count + " mục dữ liệu! Hệ thống hiện đã sẵn sàng để anh nhập liệu mới.");
+      setLoading(false);
     } catch (error) {
       console.error("Hard Reset Error:", error);
-      alert("Có lỗi xảy ra khi dọn dẹp dữ liệu. Anh vui lòng kiểm tra lại kết nối mạng nhé.");
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg.includes('unavailable')) {
+        alert("LỖI KẾT NỐI: Tin không thể kết nối tới máy chủ Firestore. Anh hãy thử tải lại trang (F5) hoặc kiểm tra lại mạng nhé.");
+      } else {
+        alert("Có lỗi xảy ra khi dọn dẹp. Anh kiểm tra lại xem đã đăng nhập đúng tài khoản " + userEmail + " chưa nhé.");
+      }
+      setLoading(false);
     }
   };
 

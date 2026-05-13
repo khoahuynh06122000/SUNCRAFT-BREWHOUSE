@@ -8,11 +8,30 @@ import {
   signInAnonymously,
   updateProfile
 } from 'firebase/auth';
-import { getFirestore, collection, doc, getDocs, getDocFromServer, setDoc, updateDoc, deleteDoc, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  collection, 
+  doc, 
+  getDocs, 
+  getDocFromServer, 
+  setDoc, 
+  updateDoc, 
+  deleteDoc, 
+  query, 
+  where, 
+  onSnapshot, 
+  orderBy,
+  writeBatch
+} from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); 
+
+// Using initializeFirestore with experimentalForceLongPolling to bypass potential WebSocket blocks
+export const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true,
+}, firebaseConfig.firestoreDatabaseId); 
+
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 
@@ -28,6 +47,7 @@ export {
   where, 
   onSnapshot,
   orderBy,
+  writeBatch,
   signInWithPopup,
   signOut,
   onAuthStateChanged,
