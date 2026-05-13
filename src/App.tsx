@@ -1425,21 +1425,26 @@ export default function App() {
   // Auto-fill batch for newest product if exporting
   useEffect(() => {
     if (activeTab === 'export') {
-      const updatedItems = newTransaction.items.map(item => {
+      const currentItems = newTransaction.items;
+      let hasChange = false;
+      
+      const updatedItems = currentItems.map(item => {
         if (!item.productId) return item;
         const oldestBatch = batches.find(b => b.productId === item.productId && b.stock > 0);
-        if (oldestBatch && oldestBatch.batchNumber !== item.batchNumber) {
-          return { ...item, batchNumber: oldestBatch.batchNumber };
+        const targetBatch = oldestBatch ? oldestBatch.batchNumber : '';
+        
+        if (targetBatch && item.batchNumber !== targetBatch) {
+          hasChange = true;
+          return { ...item, batchNumber: targetBatch };
         }
         return item;
       });
       
-      const changed = updatedItems.some((item, i) => item.batchNumber !== newTransaction.items[i].batchNumber);
-      if (changed) {
+      if (hasChange) {
         setNewTransaction(prev => ({ ...prev, items: updatedItems }));
       }
     }
-  }, [activeTab, newTransaction.items, batches]);
+  }, [activeTab, batches]); // Removed newTransaction.items from dependency to prevent loop
 
   // Default supplier for import
   useEffect(() => {
@@ -1907,22 +1912,27 @@ export default function App() {
       await batch.commit();
       
       const inTransit = newTransaction.isInTransit;
-      setNewTransaction({ 
-        type: 'IN',
-        partnerId: partners[0]?.id || '',
-        notes: '',
-        evidencePhotoUrl: '',
-        date: format(new Date(), 'yyyy-MM-dd'),
-        isInTransit: false,
-        items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
-      });
       
+      // Delay reset state slightly to ensure tab change happens first, preventing re-render loop if on export tab
       setActiveTab(inTransit ? 'in-transit' : 'history');
+      
+      setTimeout(() => {
+        setNewTransaction({ 
+          type: 'IN',
+          partnerId: partners.find(p => p.id === 'SKB-BNC' || p.name === 'SKB-BNC')?.id || partners[0]?.id || '',
+          notes: '',
+          evidencePhotoUrl: '',
+          date: format(new Date(), 'yyyy-MM-dd'),
+          isInTransit: false,
+          items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
+        });
+        setLoading(false);
+      }, 100);
+      
       alert(`Đã cập nhật ${validItems.length} mặt hàng thành công!`);
     } catch (err) {
       console.error(err);
       alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!');
-    } finally {
       setLoading(false);
     }
   };
