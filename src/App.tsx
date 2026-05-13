@@ -68,7 +68,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { motion, AnimatePresence } from 'motion/react';
+
 import { 
   isValid,
   parse,
@@ -175,7 +175,12 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   }
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  
+  // Instead of throwing which crashes the component, we'll alert and log
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  if (errorMessage.includes('Insufficient permissions')) {
+    alert(`Lỗi phân quyền: Anh chưa có quyền thực hiện thao tác ${operationType} trên ${path || 'dữ liệu'}.`);
+  }
 }
 
 // --- Components ---
@@ -243,10 +248,8 @@ const formatDisplayDate = (dateStr: string) => {
 };
 
 const Card = ({ children, className, title, noPadding }: { children: ReactNode; className?: string; title?: string; noPadding?: boolean; key?: any }) => (
-  <motion.div 
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    className={cn("bg-white/80 backdrop-blur-md border border-white/40 rounded-[20px] sm:rounded-[28px] overflow-hidden premium-shadow", className)}
+  <div 
+    className={cn("bg-white/80 backdrop-blur-md border border-white/40 rounded-[20px] sm:rounded-[28px] overflow-hidden premium-shadow transition-none", className)}
   >
     {title && (
       <div className="px-4 py-2.5 sm:px-8 sm:py-5 border-b border-slate-50/50 flex items-center justify-between bg-slate-50/20">
@@ -254,7 +257,7 @@ const Card = ({ children, className, title, noPadding }: { children: ReactNode; 
       </div>
     )}
     <div className={noPadding ? "" : "px-4 py-4 sm:px-8 sm:py-6"}>{children}</div>
-  </motion.div>
+  </div>
 );
 
 const StatCard = ({ title, value, unit, icon: Icon, color = 'primary', subtitle, target, trend, chartData }: any) => (
@@ -1415,6 +1418,10 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   const batches = useMemo(() => {
     if (!transactions.length) return [];
     
+    // Look up products faster with a map
+    const productMap = new Map<string, Product>();
+    products.forEach(p => productMap.set(p.id, p));
+
     // Group transactions by product and batch for O(1) lookup
     const batchMap = new Map<string, BatchInfo>();
     
@@ -1425,38 +1432,44 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       
       let existing = batchMap.get(key);
       if (!existing) {
-        const product = products.find(p => p.id === t.productId);
+        const product = productMap.get(t.productId);
         if (!product) continue;
         
         existing = {
           batchNumber: t.batchNumber,
           productId: t.productId,
-          productName: t.productName,
-          category: t.category,
+          productName: t.productName || product.name,
+          category: t.category || product.category,
           stock: 0,
           importDate: t.date
         };
         batchMap.set(key, existing);
       }
       
+      const qty = Number(t.quantity) || 0;
+
       if (t.type === 'IN' || t.type === 'OPENING') {
-        existing.stock += t.quantity;
+        existing.stock += qty;
         // Keep earliest import date
-        if (t.date < existing.importDate) {
+        if (t.date && t.date < existing.importDate) {
           existing.importDate = t.date;
         }
       } else if ((t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') && t.status !== 'in_transit') {
-        existing.stock -= t.quantity;
-        if (!existing.lastExportDate || t.date > existing.lastExportDate) {
+        existing.stock -= qty;
+        if (t.date && (!existing.lastExportDate || t.date > existing.lastExportDate)) {
           existing.lastExportDate = t.date;
         }
       }
     }
 
     // Return batches (filter empty if needed, or keep for history)
-    return Array.from(batchMap.values()).sort((a, b) => 
-      new Date(a.importDate).getTime() - new Date(b.importDate).getTime()
-    );
+    return Array.from(batchMap.values()).sort((a, b) => {
+      const timeA = new Date(a.importDate).getTime();
+      const timeB = new Date(b.importDate).getTime();
+      if (isNaN(timeA)) return 1;
+      if (isNaN(timeB)) return -1;
+      return timeA - timeB;
+    });
   }, [transactions, products]);
 
   // AUTO-FILL FIFO SUGGESTION
@@ -1703,13 +1716,16 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
 
     // 2. Aggregate from pre-calculated batches (O(B))
+    const productMap = new Map<string, Product>();
+    products.forEach(p => productMap.set(p.id, p));
+
     batches.forEach(b => {
       const item = invMap.get(b.productId);
-      const product = products.find(p => p.id === b.productId);
+      const product = productMap.get(b.productId);
       if (item && product) {
         item.stock += b.stock;
         const units = b.stock * (product.conversionFactor || 1);
-        const liters = (units * product.capacityPerUnit) / 1000;
+        const liters = (units * (product.capacityPerUnit || 1000)) / 1000;
         item.totalLiters += liters;
       }
     });
@@ -2069,10 +2085,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
         <div className="absolute top-0 right-0 w-[1000px] h-[1000px] bg-primary/20 blur-[160px] rounded-full -mr-[500px] -mt-[500px] pointer-events-none" />
         <div className="absolute bottom-0 left-0 w-[800px] h-[800px] bg-emerald-500/10 blur-[130px] rounded-full -ml-[400px] -mb-[400px] pointer-events-none" />
         
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.98 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.8, ease: "circOut" }}
+        <div 
           className="w-full max-w-md relative z-10"
         >
           <div className="bg-white/10 backdrop-blur-3xl rounded-[32px] sm:rounded-[48px] p-8 sm:p-12 shadow-2xl border border-white/10 ring-1 ring-white/5">
@@ -2123,9 +2136,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                     Tiếp tục với tư cách Khách
                   </button>
                 ) : (
-                  <motion.div 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
+                  <div 
                     className="space-y-4 p-6 bg-white/5 rounded-[24px] border border-white/10 backdrop-blur-3xl"
                   >
                     <p className="text-[9px] font-black text-white/40 uppercase tracking-widest mb-2 px-1">Nhập tên của bạn</p>
@@ -2152,7 +2163,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                         Xác nhận
                       </button>
                     </div>
-                  </motion.div>
+                  </div>
                 )}
               </div>
             </div>
@@ -2167,7 +2178,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
             </div>
           </div>
           <p className="text-center text-white/10 text-[8px] font-black uppercase tracking-[0.5em] mt-10">Zero-Trust Cloud Security Enforced</p>
-        </motion.div>
+        </div>
       </div>
     );
   }
@@ -2175,17 +2186,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   return (
     <div className="flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden">
       {/* Sidebar Overlay (Mobile) */}
-      <AnimatePresence>
-        {sidebarOpen && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 lg:hidden"
-          />
-        )}
-      </AnimatePresence>
+      {sidebarOpen && (
+        <div 
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 lg:hidden"
+        />
+      )}
 
       {/* Sidebar */}
       <aside 
@@ -2229,8 +2235,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 />
                 <span className="text-xs sm:text-sm font-black uppercase tracking-widest">{item.label}</span>
                 {activeTab === item.id && (
-                  <motion.div 
-                    layoutId="activeTabGlow"
+                  <div 
                     className="absolute inset-0 bg-gradient-to-r"
                     style={{ background: `linear-gradient(to right, ${item.color}20, transparent)` }}
                   />
@@ -2566,13 +2571,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                    </div>
                                 </div>
                                 <div className="h-1.5 sm:h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                                   <motion.div 
-                                      initial={{ width: 0 }}
-                                      animate={{ width: `${Math.min(100, (item.stock / (item.minStock || 1)) * 100)}%` }}
+                                   <div 
                                       className={cn(
                                         "h-full rounded-full transition-all duration-1000 ease-out",
                                         item.stock <= 0 ? "bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,0.5)]" : "bg-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.5)]"
                                       )}
+                                      style={{ width: `${Math.min(100, (item.stock / (item.minStock || 1)) * 100)}%` }}
                                    />
                                 </div>
                              </div>
@@ -2783,19 +2787,15 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   </Card>
 
                   {/* Batch Detail Modal/Section */}
-                  <AnimatePresence>
-                    {selectedInventoryProduct && (
-                      <motion.div 
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6"
-                      >
-                        <div 
-                          className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" 
-                          onClick={() => setSelectedInventoryProduct(null)} 
-                        />
-                        <Card className="relative w-full max-w-2xl bg-white shadow-2xl border-2 border-slate-900 rounded-[32px] overflow-hidden" noPadding>
+                  {selectedInventoryProduct && (
+                    <div 
+                      className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6"
+                    >
+                      <div 
+                        className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" 
+                        onClick={() => setSelectedInventoryProduct(null)} 
+                      />
+                      <Card className="relative w-full max-w-2xl bg-white shadow-2xl border-2 border-slate-900 rounded-[32px] overflow-hidden" noPadding>
                           <div className="bg-slate-900 p-6 flex justify-between items-center">
                             <div className="flex items-center gap-4">
                               <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center">
@@ -2865,9 +2865,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                             </div>
                           </div>
                         </Card>
-                      </motion.div>
+                      </div>
                     )}
-                  </AnimatePresence>
                 </div>
               )}
 
@@ -2932,9 +2931,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   </div>
 
                   {batchLifecycle && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
+                    <div 
                       className="bg-white border-2 border-slate-900 rounded-[32px] overflow-hidden shadow-2xl shadow-slate-200"
                     >
                       <div className="bg-slate-900 px-8 py-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -3025,7 +3022,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                           Truy xuất dữ liệu trên toàn bộ hệ thống (Bao gồm dữ liệu ngoài khoảng thời gian đang lọc)
                         </p>
                       </div>
-                    </motion.div>
+                    </div>
                   )}
 
                   {reportSubTab === 'summary' && (
@@ -3482,10 +3479,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                       <h3 className="text-4xl sm:text-5xl font-bold tracking-tighter text-center md:text-left">{Math.round(totalReconciliationScore)}%</h3>
                                       <div className="mt-3 sm:mt-4">
                                         <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden">
-                                          <motion.div 
-                                            initial={{ width: 0 }}
-                                            animate={{ width: `${totalReconciliationScore}%` }}
+                                          <div 
                                             className="h-full bg-primary"
+                                            style={{ width: `${totalReconciliationScore}%` }}
                                           />
                                         </div>
                                       </div>
@@ -3536,10 +3532,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                             </div>
                                           </div>
                                           <div className="h-1.5 w-full bg-slate-50 rounded-full overflow-hidden flex">
-                                            <motion.div 
-                                              initial={{ width: 0 }}
-                                              animate={{ width: `${item.matchPercentage}%` }}
+                                            <div 
                                               className={cn("h-full", item.diff === 0 ? "bg-emerald-400" : "bg-primary")}
+                                              style={{ width: `${item.matchPercentage}%` }}
                                             />
                                           </div>
                                         </div>
@@ -3783,9 +3778,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
                                       {/* Nested Detail View */}
                                       {isExpanded && (
-                                        <motion.div 
-                                          initial={{ height: 0, opacity: 0 }}
-                                          animate={{ height: 'auto', opacity: 1 }}
+                                        <div 
                                           className="relative -mt-4 pt-8 pb-4 px-8 bg-slate-50/50 border-x border-b border-slate-100/60 rounded-b-2xl z-0 overflow-hidden"
                                         >
                                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -3802,7 +3795,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                               </div>
                                             ))}
                                           </div>
-                                        </motion.div>
+                                        </div>
                                       )}
                                     </div>
                                   );
@@ -4493,9 +4486,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
               {activeTab === 'partners' && (
                 <div className="space-y-6">
                   {isOwner && partners.length <= 1 && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: -20 }}
-                      animate={{ opacity: 1, y: 0 }}
+                    <div 
                       className="bg-amber-50 border border-amber-200 p-6 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-6"
                     >
                       <div className="flex items-center gap-4">
@@ -4513,7 +4504,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                       >
                         <RefreshCw className="w-4 h-4" /> Khôi phục ngay
                       </button>
-                    </motion.div>
+                    </div>
                   )}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -4652,12 +4643,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
                     {filteredGalleryTransactions.length > 0 ? (
                       filteredGalleryTransactions.map((t) => (
-                        <motion.div 
+                        <div 
                           key={t.id}
-                          layoutId={`img-${t.id}`}
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          whileHover={{ y: -5 }}
                           className="group relative bg-white rounded-3xl overflow-hidden shadow-sm hover:shadow-2xl transition-all border border-slate-100 cursor-pointer"
                           onClick={() => setSelectedGalleryImage(t)}
                         >
@@ -4698,7 +4685,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                <ImageIcon className="w-5 h-5" />
                              </div>
                           </div>
-                        </motion.div>
+                        </div>
                       ))
                     ) : (
                       <div className="col-span-full py-32 flex flex-col items-center justify-center text-center space-y-4 border-dashed border-2 bg-slate-50/50 rounded-[32px]">
@@ -4718,81 +4705,68 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
               )}
 
               {/* Fullscreen Image View Modal */}
-              <AnimatePresence>
-                {selectedGalleryImage && (
-                  <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setSelectedGalleryImage(null)}
-                      className="absolute inset-0 bg-slate-950/95 backdrop-blur-2xl"
+              {selectedGalleryImage && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                  <div 
+                    onClick={() => setSelectedGalleryImage(null)}
+                    className="absolute inset-0 bg-slate-950/95 backdrop-blur-2xl"
+                  />
+                  <div 
+                    className="relative w-full max-w-4xl max-h-[85vh] flex flex-col"
+                  >
+                    <div className="absolute -top-16 left-0 right-0 flex items-center justify-between pointer-events-none">
+                       <div className="flex flex-col">
+                          <h3 className="text-white font-black text-xl uppercase tracking-tighter">{selectedGalleryImage.productName}</h3>
+                          <p className="text-white/40 text-[10px] font-black uppercase tracking-widest mt-1">
+                            Ngày up: {formatDate(selectedGalleryImage.date)} • {selectedGalleryImage.partnerName}
+                          </p>
+                       </div>
+                       <div className="flex gap-4 pointer-events-auto">
+                          <a 
+                            href={selectedGalleryImage.evidencePhotoUrl} 
+                            download={`BCSX-${selectedGalleryImage.id}.png`}
+                            className="w-12 h-12 bg-white/10 hover:bg-white text-white hover:text-slate-900 rounded-2xl flex items-center justify-center backdrop-blur-xl border border-white/10 transition-all"
+                          >
+                            <Download className="w-6 h-6" />
+                          </a>
+                          <button 
+                            onClick={() => setSelectedGalleryImage(null)}
+                            className="w-12 h-12 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl transition-all active:scale-90"
+                          >
+                            <X className="w-6 h-6" />
+                          </button>
+                       </div>
+                    </div>
+                    <img 
+                      src={selectedGalleryImage.evidencePhotoUrl} 
+                      className="w-full h-full object-contain rounded-3xl shadow-2xl"
+                      alt="Zoomed" 
                     />
-                    <motion.div 
-                      layoutId={`img-${selectedGalleryImage.id}`}
-                      className="relative w-full max-w-4xl max-h-[85vh] flex flex-col"
-                    >
-                      <div className="absolute -top-16 left-0 right-0 flex items-center justify-between pointer-events-none">
-                         <div className="flex flex-col">
-                            <h3 className="text-white font-black text-xl uppercase tracking-tighter">{selectedGalleryImage.productName}</h3>
-                            <p className="text-white/40 text-[10px] font-black uppercase tracking-widest mt-1">
-                              Ngày up: {formatDate(selectedGalleryImage.date)} • {selectedGalleryImage.partnerName}
-                            </p>
-                         </div>
-                         <div className="flex gap-4 pointer-events-auto">
-                            <a 
-                              href={selectedGalleryImage.evidencePhotoUrl} 
-                              download={`BCSX-${selectedGalleryImage.id}.png`}
-                              className="w-12 h-12 bg-white/10 hover:bg-white text-white hover:text-slate-900 rounded-2xl flex items-center justify-center backdrop-blur-xl border border-white/10 transition-all"
-                            >
-                              <Download className="w-6 h-6" />
-                            </a>
-                            <button 
-                              onClick={() => setSelectedGalleryImage(null)}
-                              className="w-12 h-12 bg-rose-500 text-white rounded-2xl flex items-center justify-center shadow-2xl transition-all active:scale-90"
-                            >
-                              <X className="w-6 h-6" />
-                            </button>
-                         </div>
-                      </div>
-                      <img 
-                        src={selectedGalleryImage.evidencePhotoUrl} 
-                        className="w-full h-full object-contain rounded-3xl shadow-2xl"
-                        alt="Zoomed" 
-                      />
-                    </motion.div>
                   </div>
-                )}
-              </AnimatePresence>
+                </div>
+              )}
 
               {/* Add Partner Modal */}
-              <AnimatePresence>
-                {showAddPartner && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setShowAddPartner(false)}
-                      className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
-                    />
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                      animate={{ opacity: 1, scale: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.95, y: 20 }}
-                      className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl overflow-hidden p-8"
-                    >
-                      <div className="flex items-center justify-between mb-8">
-                        <div>
-                          <h3 className="text-xl font-black text-slate-900 underline decoration-indigo-200 underline-offset-4">ĐỐI TÁC MỚI</h3>
-                          <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Khởi rạo quan hệ hợp tác</p>
-                        </div>
-                        <button onClick={() => setShowAddPartner(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                          <X className="w-5 h-5 text-slate-400" />
-                        </button>
+              {showAddPartner && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                  <div 
+                    onClick={() => setShowAddPartner(false)}
+                    className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm"
+                  />
+                  <div 
+                    className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl overflow-hidden p-8"
+                  >
+                    <div className="flex items-center justify-between mb-8">
+                      <div>
+                        <h3 className="text-xl font-black text-slate-900 underline decoration-indigo-200 underline-offset-4">ĐỐI TÁC MỚI</h3>
+                        <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Khởi rạo quan hệ hợp tác</p>
                       </div>
+                      <button onClick={() => setShowAddPartner(false)} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                        <X className="w-5 h-5 text-slate-400" />
+                      </button>
+                    </div>
 
-                      <form onSubmit={handleAddPartner} className="space-y-6">
+                    <form onSubmit={handleAddPartner} className="space-y-6">
                         <div className="grid grid-cols-3 gap-4">
                           <div className="col-span-2">
                             <Input 
@@ -4840,10 +4814,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                           <Button className="flex-[2]" type="submit">Lưu Đối tác</Button>
                         </div>
                       </form>
-                    </motion.div>
+                    </div>
                   </div>
                 )}
-              </AnimatePresence>
             </div>
         </div>
       </main>
