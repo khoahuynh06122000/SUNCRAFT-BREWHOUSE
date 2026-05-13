@@ -540,6 +540,43 @@ export default function App() {
     }
   };
 
+  const handleHardReset = async () => {
+    if (!isOwner) return;
+    
+    const confirmReset = window.confirm(
+      "CẢNH BÁO: Thao tác này sẽ XÓA SẠCH toàn bộ dữ liệu (Giao dịch, Đối tác, Doanh thu) và không thể hoàn tác.\n\nAnh có chắc chắn muốn làm mới hoàn toàn hệ thống không?"
+    );
+    
+    if (!confirmReset) return;
+    
+    try {
+      // Clear Transactions
+      const transSnapshot = await getDocFromServer(doc(db, 'transactions', 'test')).catch(() => null); 
+      // Note: We normally need a full query to delete all, but the client SDK doesn't support 
+      // bulk delete easily without fetching. We'll use a simpler approach of mapping current state.
+      
+      const deletePromises: Promise<void>[] = [];
+      
+      transactions.forEach(t => {
+        if (t.id) deletePromises.push(deleteDoc(doc(db, 'transactions', t.id)));
+      });
+      
+      partners.forEach(p => {
+        if (p.id) deletePromises.push(deleteDoc(doc(db, 'partners', p.id)));
+      });
+      
+      revenueData.forEach(r => {
+        if (r.id) deletePromises.push(deleteDoc(doc(db, 'revenue', r.id)));
+      });
+
+      await Promise.all(deletePromises);
+      alert("Hệ thống đã được dọn sạch thành công! Dữ liệu gốc sẽ tự động tải lại nếu không có dữ liệu mới.");
+    } catch (error) {
+      console.error("Hard Reset Error:", error);
+      alert("Có lỗi xảy ra khi dọn dẹp dữ liệu. Anh vui lòng kiểm tra lại kết nối mạng nhé.");
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await signOut(auth);
@@ -2085,6 +2122,14 @@ export default function App() {
                 </div>
               </div>
               <div className="h-[1px] bg-slate-100" />
+              {isOwner && (
+                <button 
+                  onClick={handleHardReset}
+                  className="w-full flex items-center justify-center gap-3 py-3 rounded-xl text-amber-600 hover:bg-amber-50 text-[10px] font-black uppercase tracking-[0.2em] transition-all border border-dashed border-amber-200 hover:border-amber-300 mb-2"
+                >
+                  <RefreshCw className="w-4 h-4 animate-spin-slow" /> Dọn sạch hệ thống
+                </button>
+              )}
               <button 
                 onClick={handleLogout}
                 className="w-full flex items-center justify-center gap-3 py-3 rounded-xl text-rose-500 hover:bg-rose-50 text-[10px] font-black uppercase tracking-[0.2em] transition-all border border-transparent hover:border-rose-100"

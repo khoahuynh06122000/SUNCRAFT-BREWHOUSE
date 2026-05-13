@@ -9,6 +9,16 @@
   --color-primary: #0f172a; /* Deep Slate for professional vibe */
   --color-bg-main: #f8fafc;
   --color-accent: #f59e0b; /* Amber/Gold for beer/premium feel */
+
+  @keyframes spin-slow {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  --animate-spin-slow: spin-slow 8s linear infinite;
 }
 
 @layer base {
