@@ -59,8 +59,10 @@ export interface InventoryItem {
   productId: string;
   productName: string;
   category: Category;
+  unit: string;
   stock: number;
   totalLiters: number;
+  minStock: number;
 }
 
 export interface RevenueRecord {

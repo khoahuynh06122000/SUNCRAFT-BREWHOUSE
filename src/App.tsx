@@ -1380,60 +1380,71 @@ export default function App() {
     setFilterBaseDate(newDate);
   };
 
-  // Derived State: Batches (Tracking stock per batch)
+  // Derived State: Batches (Tracking stock per batch) - OPTIMIZED O(N)
   const batches = useMemo(() => {
+    if (!transactions.length) return [];
+    
+    // Group transactions by product and batch for O(1) lookup
     const batchMap = new Map<string, BatchInfo>();
     
-    // Process ALL transactions to build accurate batch status
-    transactions.forEach(t => {
-      if (!t.batchNumber) return;
+    // Single pass through transactions
+    for (const t of transactions) {
+      if (!t.batchNumber || !t.productId) continue;
       const key = `${t.productId}_${t.batchNumber}`;
-      const existing = batchMap.get(key);
-      const product = products.find(p => p.id === t.productId);
+      
+      let existing = batchMap.get(key);
+      if (!existing) {
+        const product = products.find(p => p.id === t.productId);
+        if (!product) continue;
+        
+        existing = {
+          batchNumber: t.batchNumber,
+          productId: t.productId,
+          productName: t.productName,
+          category: t.category,
+          stock: 0,
+          importDate: t.date
+        };
+        batchMap.set(key, existing);
+      }
       
       if (t.type === 'IN' || t.type === 'OPENING') {
-        if (existing) {
-          existing.stock += t.quantity;
-          // Keep earliest import date
-          if (new Date(t.date) < new Date(existing.importDate)) {
-            existing.importDate = t.date;
-          }
-        } else if (product) {
-          batchMap.set(key, {
-            batchNumber: t.batchNumber,
-            productId: t.productId,
-            productName: t.productName,
-            category: t.category,
-            stock: t.quantity,
-            importDate: t.date
-          });
+        existing.stock += t.quantity;
+        // Keep earliest import date
+        if (t.date < existing.importDate) {
+          existing.importDate = t.date;
         }
-      } else if (t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') {
-        if (existing) {
-          existing.stock -= t.quantity;
+      } else if ((t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') && t.status !== 'in_transit') {
+        existing.stock -= t.quantity;
+        if (!existing.lastExportDate || t.date > existing.lastExportDate) {
           existing.lastExportDate = t.date;
         }
       }
-    });
+    }
 
-    // Sort by import date ASC (FIFO)
+    // Return batches (filter empty if needed, or keep for history)
     return Array.from(batchMap.values()).sort((a, b) => 
       new Date(a.importDate).getTime() - new Date(b.importDate).getTime()
     );
   }, [transactions, products]);
 
-  // Auto-fill batch for newest product if exporting
+  // AUTO-FILL FIFO SUGGESTION
   useEffect(() => {
-    if (activeTab === 'export') {
+    if (activeTab === 'export' && !loading) {
       const currentItems = newTransaction.items;
       let hasChange = false;
       
       const updatedItems = currentItems.map(item => {
         if (!item.productId) return item;
+        const product = products.find(p => p.id === item.productId);
+        if (!product) return item;
+
+        // Tìm lô đầu tiên còn hàng
         const oldestBatch = batches.find(b => b.productId === item.productId && b.stock > 0);
         const targetBatch = oldestBatch ? oldestBatch.batchNumber : '';
         
-        if (targetBatch && item.batchNumber !== targetBatch) {
+        // Chỉ cập nhật nếu Lô dự kiến khác Lô hiện tại và Lô hiện tại chưa được người dùng nhập thủ công (hoặc rỗng)
+        if (targetBatch && item.batchNumber !== targetBatch && (!item.batchNumber || item.batchNumber === '')) {
           hasChange = true;
           return { ...item, batchNumber: targetBatch };
         }
@@ -1444,7 +1455,7 @@ export default function App() {
         setNewTransaction(prev => ({ ...prev, items: updatedItems }));
       }
     }
-  }, [activeTab, batches]); // Removed newTransaction.items from dependency to prevent loop
+  }, [activeTab, batches, loading, products]); // Added products to dependencies
 
   // Default supplier for import
   useEffect(() => {
@@ -1647,37 +1658,33 @@ export default function App() {
   const inventory = useMemo(() => {
     const invMap = new Map<string, InventoryItem>();
     
-    // Initialize
+    // 1. Initialize for all products
     products.forEach(p => {
       invMap.set(p.id, {
         productId: p.id,
         productName: p.name,
         category: p.category,
+        unit: p.unit,
         stock: 0,
-        totalLiters: 0
+        totalLiters: 0,
+        minStock: p.minStock
       });
     });
 
-    // Calculate
-    transactions.forEach(t => {
-      // Don't subtract from current inventory if it's still in transit
-      if (t.type === 'OUT' && t.status === 'in_transit') return;
-
-      const item = invMap.get(t.productId);
-      const product = products.find(p => p.id === t.productId);
+    // 2. Aggregate from pre-calculated batches (O(B))
+    batches.forEach(b => {
+      const item = invMap.get(b.productId);
+      const product = products.find(p => p.id === b.productId);
       if (item && product) {
-        const multiplier = (t.type === 'IN' || t.type === 'OPENING') ? 1 : -1;
-        item.stock += multiplier * t.quantity;
-        
-        // Calculate liters for this transaction
-        const units = t.quantity * (product.conversionFactor || 1);
+        item.stock += b.stock;
+        const units = b.stock * (product.conversionFactor || 1);
         const liters = (units * product.capacityPerUnit) / 1000;
-        item.totalLiters += multiplier * liters;
+        item.totalLiters += liters;
       }
     });
 
-    return Array.from(invMap.values());
-  }, [transactions, products]);
+    return Array.from(invMap.values()).sort((a, b) => b.stock - a.stock);
+  }, [batches, products]);
 
   // Reconciliation Dashboard Logic
   const reconciliationData = useMemo(() => {
@@ -1913,23 +1920,20 @@ export default function App() {
       
       const inTransit = newTransaction.isInTransit;
       
-      // Delay reset state slightly to ensure tab change happens first, preventing re-render loop if on export tab
+      // Immediate state updates
       setActiveTab(inTransit ? 'in-transit' : 'history');
+      setNewTransaction({ 
+        type: 'IN',
+        partnerId: partners.find(p => p.id === 'SKB-BNC' || p.name === 'SKB-BNC')?.id || partners[0]?.id || '',
+        notes: '',
+        evidencePhotoUrl: '',
+        date: format(new Date(), 'yyyy-MM-dd'),
+        isInTransit: false,
+        items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
+      });
       
-      setTimeout(() => {
-        setNewTransaction({ 
-          type: 'IN',
-          partnerId: partners.find(p => p.id === 'SKB-BNC' || p.name === 'SKB-BNC')?.id || partners[0]?.id || '',
-          notes: '',
-          evidencePhotoUrl: '',
-          date: format(new Date(), 'yyyy-MM-dd'),
-          isInTransit: false,
-          items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
-        });
-        setLoading(false);
-      }, 100);
-      
-      alert(`Đã cập nhật ${validItems.length} mặt hàng thành công!`);
+      setLoading(false);
+      alert(`Anh Khoa ơi, Tin đã ghi nhận xong ${validItems.length} mặt hàng rồi ạ!`);
     } catch (err) {
       console.error(err);
       alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!');
@@ -2267,14 +2271,17 @@ export default function App() {
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar bg-slate-50/30">
-          <AnimatePresence mode="wait">
+          <AnimatePresence mode="wait" initial={false}>
             <motion.div
               key={activeTab}
-              initial={{ opacity: 0, x: 10 }}
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              transition={{ duration: 0.2, ease: "easeOut" }}
-              className="max-w-7xl mx-auto space-y-4 sm:space-y-8"
+              initial={{ opacity: 0, y: 15 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -15 }}
+              transition={{ 
+                duration: 0.25, 
+                ease: [0.16, 1, 0.3, 1] // Custom Expo-style ease-out for maximum smoothness
+              }}
+              className="max-w-7xl mx-auto space-y-4 sm:space-y-8 pb-24"
             >
               {/* Global Filter Bar for Analytical Tabs */}
               {['dashboard', 'inventory', 'reports', 'revenue-mgmt', 'history'].includes(activeTab) && (
@@ -4095,22 +4102,80 @@ export default function App() {
                       <div className="md:col-span-2 mt-4">
                         <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
                           <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Danh sách mặt hàng ({newTransaction.items.length})</h4>
-                          <button 
-                            onClick={addTransactionItem}
-                            className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-1.5 hover:bg-primary/5 px-3 py-1.5 rounded-lg transition-all"
-                          >
-                            <PlusCircle className="w-3.5 h-3.5" /> Thêm mặt hàng
-                          </button>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => {
+                                const missingProducts = products.filter(p => !newTransaction.items.some(item => item.productId === p.id));
+                                if (!missingProducts.length) return alert("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
+                                
+                                setNewTransaction(prev => ({
+                                  ...prev,
+                                  items: [
+                                    ...prev.items.filter(i => i.productId !== ''),
+                                    ...missingProducts.map(p => ({ productId: p.id, quantity: 0, batchNumber: '' }))
+                                  ]
+                                }));
+                              }}
+                              className="text-[10px] font-black text-amber-600 bg-amber-50 uppercase tracking-widest flex items-center gap-1.5 hover:bg-amber-100 px-3 py-1.5 rounded-lg transition-all"
+                            >
+                              <Layers className="w-3.5 h-3.5" /> Thêm toàn bộ danh mục
+                            </button>
+                            <button 
+                              onClick={() => {
+                                // Simple quick select: allow user to select multiple products at once
+                                const availableProducts = products.filter(p => 
+                                  !newTransaction.items.some(item => item.productId === p.id)
+                                );
+                                if (availableProducts.length === 0) {
+                                  alert("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
+                                  return;
+                                }
+                                
+                                const selectedIds = window.prompt(
+                                  "Nhập tên sản phẩm để chọn nhanh (Ngăn cách bởi dấu phẩy):\n" + 
+                                  availableProducts.map(p => p.name).join(', ')
+                                );
+                                
+                                if (selectedIds) {
+                                  const searchTerms = selectedIds.split(',').map(s => s.trim().toLowerCase());
+                                  const matches = availableProducts.filter(p => 
+                                    searchTerms.some(term => p.name.toLowerCase().includes(term))
+                                  );
+                                  
+                                  if (matches.length > 0) {
+                                    setNewTransaction(prev => ({
+                                      ...prev,
+                                      items: [
+                                        ...prev.items.filter(i => i.productId !== ''),
+                                        ...matches.map(p => ({ productId: p.id, quantity: 0, batchNumber: '' }))
+                                      ]
+                                    }));
+                                  }
+                                }
+                              }}
+                              className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5 hover:bg-slate-100 px-3 py-1.5 rounded-lg transition-all"
+                            >
+                              <Search className="w-3.5 h-3.5" /> Chọn nhanh
+                            </button>
+                            <button 
+                              onClick={addTransactionItem}
+                              className="text-[10px] font-black text-primary uppercase tracking-widest flex items-center gap-1.5 hover:bg-primary/5 px-3 py-1.5 rounded-lg transition-all"
+                            >
+                              <PlusCircle className="w-3.5 h-3.5" /> Thêm dòng
+                            </button>
+                          </div>
                         </div>
 
                         <div className="space-y-4">
                           <AnimatePresence initial={false}>
                             {newTransaction.items.map((item, index) => (
                               <motion.div 
-                                key={index}
-                                initial={{ opacity: 0, height: 0 }}
-                                animate={{ opacity: 1, height: 'auto' }}
-                                exit={{ opacity: 0, height: 0 }}
+                                key={`item-${index}-${item.productId}`}
+                                layout
+                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                                animate={{ opacity: 1, scale: 1, y: 0 }}
+                                exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                                transition={{ duration: 0.2 }}
                                 className="p-4 sm:p-6 bg-slate-50/50 rounded-2xl border border-dotted border-slate-200 relative group/item"
                               >
                                 {newTransaction.items.length > 1 && (
