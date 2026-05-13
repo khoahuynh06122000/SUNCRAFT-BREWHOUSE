@@ -127,7 +127,8 @@ import {
   onSnapshot,
   query,
   orderBy,
-  getDocFromServer
+  getDocFromServer,
+  writeBatch
 } from './firebase';
 
 enum OperationType {
@@ -587,6 +588,27 @@ export default function App() {
       } else {
         alert("Có lỗi xảy ra khi dọn dẹp. Anh kiểm tra lại xem đã đăng nhập đúng tài khoản " + userEmail + " chưa nhé.");
       }
+      setLoading(false);
+    }
+  };
+
+  const handleRestorePartners = async () => {
+    if (!isOwner) return;
+    
+    if (!window.confirm("Tin Tin sẽ giúp anh khôi phục lại toàn bộ danh sách Đối tác (SKB, APC, BNG, Capella...) vào hệ thống. Anh đồng ý chứ?")) return;
+
+    setLoading(true);
+    try {
+      const batch = writeBatch(db);
+      INITIAL_PARTNERS.forEach(p => {
+        batch.set(doc(db, 'partners', p.id), p);
+      });
+      await batch.commit();
+      alert("Tin đã khôi phục danh sách Đối tác thành công rồi anh nhé!");
+    } catch (error) {
+      console.error("Restore Partners Error:", error);
+      alert("Có lỗi khi khôi phục đối tác. Anh kiểm tra lại kết nối mạng hoặc phân quyền nhé.");
+    } finally {
       setLoading(false);
     }
   };
@@ -4270,7 +4292,32 @@ export default function App() {
               )}
 
               {activeTab === 'partners' && (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div className="space-y-6">
+                  {isOwner && partners.length <= 1 && (
+                    <motion.div 
+                      initial={{ opacity: 0, y: -20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="bg-amber-50 border border-amber-200 p-6 rounded-3xl flex flex-col sm:flex-row items-center justify-between gap-6"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-amber-500 rounded-2xl flex items-center justify-center text-white shadow-lg">
+                          <Users className="w-6 h-6" />
+                        </div>
+                        <div className="text-center sm:text-left">
+                          <h3 className="text-sm font-black text-amber-900 uppercase tracking-widest">Danh sách Đối tác đang trống</h3>
+                          <p className="text-xs font-bold text-amber-700/70 mt-1">Anh có muốn Tin khôi phục lại danh sách đối tác mẫu (SKB, APC, BNG...) không?</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={handleRestorePartners}
+                        className="px-8 py-3.5 bg-amber-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-amber-600/20 hover:bg-amber-700 active:scale-95 transition-all flex items-center gap-2"
+                      >
+                        <RefreshCw className="w-4 h-4" /> Khôi phục ngay
+                      </button>
+                    </motion.div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {partners.map(p => (
                     <Card key={p.id} className="relative group">
                       <div className="flex items-start justify-between">
@@ -4324,7 +4371,8 @@ export default function App() {
                     <span className="text-sm font-medium">Thêm đối tác mới</span>
                   </button>
                 </div>
-              )}
+              </div>
+            )}
 
               {activeTab === 'gallery' && (
                 <div className="space-y-8">
