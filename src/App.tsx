@@ -1065,6 +1065,37 @@ export default function App() {
   };
 
   // FIFO Helper for auto-allocation
+const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, quality = 0.6): Promise<string> => {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+
+      if (width > height) {
+        if (width > maxWidth) {
+          height *= maxWidth / width;
+          width = maxWidth;
+        }
+      } else {
+        if (height > maxHeight) {
+          width *= maxHeight / height;
+          height = maxHeight;
+        }
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx?.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(base64Str); // Fallback to original
+  });
+};
+
   const getFIFOAllocations = (productId: string, quantity: number, currentBatches: BatchInfo[]) => {
     const allocations: { batchNumber: string, quantity: number }[] = [];
     let remaining = quantity;
@@ -1932,11 +1963,11 @@ export default function App() {
         items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
       });
       
-      setLoading(false);
       alert(`Anh Khoa ơi, Tin đã ghi nhận xong ${validItems.length} mặt hàng rồi ạ!`);
     } catch (err) {
       console.error(err);
-      alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!');
+      alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé! (Lỗi: ' + (err instanceof Error ? err.message : 'Unknown') + ')');
+    } finally {
       setLoading(false);
     }
   };
@@ -2271,21 +2302,13 @@ export default function App() {
 
         {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar bg-slate-50/30">
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              transition={{ 
-                duration: 0.25, 
-                ease: [0.16, 1, 0.3, 1] // Custom Expo-style ease-out for maximum smoothness
-              }}
-              className="max-w-7xl mx-auto space-y-4 sm:space-y-8 pb-24"
-            >
+          <div
+            key={activeTab}
+            className="max-w-7xl mx-auto space-y-4 sm:space-y-8 pb-24"
+          >
               {/* Global Filter Bar for Analytical Tabs */}
               {['dashboard', 'inventory', 'reports', 'revenue-mgmt', 'history'].includes(activeTab) && (
-                <div className="bg-white/80 backdrop-blur-md p-3 sm:p-4 rounded-[22px] sm:rounded-[28px] border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col md:flex-row items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4">
+                <div className="bg-white/80 backdrop-blur-md p-3 sm:p-4 rounded-[22px] sm:rounded-[28px] border border-slate-100 shadow-xl shadow-slate-200/50 flex flex-col md:flex-row items-center justify-between gap-4">
                   <div className="flex bg-slate-100/50 p-1 rounded-xl sm:rounded-2xl border border-slate-100 w-full md:w-auto overflow-x-auto no-scrollbar">
                     {[
                       { id: 'all', label: 'Tất cả' },
@@ -3881,20 +3904,13 @@ export default function App() {
                   </Card>
 
                   {/* Loss Reporting Modal */}
-                  <AnimatePresence>
                     {showLossModal && selectedInTransit && (
                       <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
-                        <motion.div 
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          exit={{ opacity: 0 }}
+                        <div 
                           onClick={() => setShowLossModal(false)}
                           className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
                         />
-                        <motion.div 
-                          initial={{ opacity: 0, scale: 0.95, y: 20 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                        <div 
                           className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl overflow-hidden p-8"
                         >
                           <div className="flex items-center justify-between mb-8">
@@ -3958,7 +3974,10 @@ export default function App() {
                                         const file = e.target.files?.[0];
                                         if (file) {
                                           const reader = new FileReader();
-                                          reader.onload = () => setLossEvidencePhoto(reader.result as string);
+                                          reader.onload = async () => {
+                                            const compressed = await compressImage(reader.result as string);
+                                            setLossEvidencePhoto(compressed);
+                                          };
                                           reader.readAsDataURL(file);
                                         }
                                       }}
@@ -3975,7 +3994,10 @@ export default function App() {
                                         const file = e.target.files?.[0];
                                         if (file) {
                                           const reader = new FileReader();
-                                          reader.onload = () => setLossEvidencePhoto(reader.result as string);
+                                          reader.onload = async () => {
+                                            const compressed = await compressImage(reader.result as string);
+                                            setLossEvidencePhoto(compressed);
+                                          };
                                           reader.readAsDataURL(file);
                                         }
                                       }}
@@ -4022,10 +4044,9 @@ export default function App() {
                               </Button>
                             </div>
                           </div>
-                        </motion.div>
+                        </div>
                       </div>
                     )}
-                  </AnimatePresence>
                 </div>
               )}
 
@@ -4033,7 +4054,7 @@ export default function App() {
                 <div className="max-w-4xl mx-auto space-y-6">
                   <div className="text-center space-y-2 mb-8">
                     <div className={cn(
-                      "w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4 transition-all duration-500 hover:rotate-6 shadow-xl",
+                      "w-16 h-16 mx-auto rounded-2xl flex items-center justify-center mb-4 shadow-xl",
                       activeTab === 'import' ? "bg-blue-600 shadow-blue-200" : "bg-rose-600 shadow-rose-200"
                     )}>
                       {activeTab === 'import' ? <PlusCircle className="text-white w-8 h-8" /> : <MinusCircle className="text-white w-8 h-8" />}
@@ -4167,15 +4188,9 @@ export default function App() {
                         </div>
 
                         <div className="space-y-4">
-                          <AnimatePresence initial={false}>
                             {newTransaction.items.map((item, index) => (
-                              <motion.div 
+                              <div 
                                 key={`item-${index}-${item.productId}`}
-                                layout
-                                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                                animate={{ opacity: 1, scale: 1, y: 0 }}
-                                exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                                transition={{ duration: 0.2 }}
                                 className="p-4 sm:p-6 bg-slate-50/50 rounded-2xl border border-dotted border-slate-200 relative group/item"
                               >
                                 {newTransaction.items.length > 1 && (
@@ -4221,9 +4236,8 @@ export default function App() {
                                     )}
                                   </div>
                                 </div>
-                              </motion.div>
+                              </div>
                             ))}
-                          </AnimatePresence>
                         </div>
                       </div>
 
@@ -4300,7 +4314,15 @@ export default function App() {
                               const file = e.target.files?.[0];
                               if (file) {
                                 const reader = new FileReader();
-                                reader.onloadend = () => setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
+                                reader.onloadend = async () => {
+                                  try {
+                                    const compressed = await compressImage(reader.result as string);
+                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
+                                  } catch (err) {
+                                    console.error("Compression failed", err);
+                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
+                                  }
+                                };
                                 reader.readAsDataURL(file);
                               }
                             }}
@@ -4310,7 +4332,15 @@ export default function App() {
                               const file = e.target.files?.[0];
                               if (file) {
                                 const reader = new FileReader();
-                                reader.onloadend = () => setNewTransaction({ ...newTransaction, evidencePhotoUrl: reader.result as string });
+                                reader.onloadend = async () => {
+                                  try {
+                                    const compressed = await compressImage(reader.result as string);
+                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
+                                  } catch (err) {
+                                    console.error("Compression failed", err);
+                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
+                                  }
+                                };
                                 reader.readAsDataURL(file);
                               }
                             }}
@@ -4814,8 +4844,7 @@ export default function App() {
                   </div>
                 )}
               </AnimatePresence>
-            </motion.div>
-          </AnimatePresence>
+            </div>
         </div>
       </main>
     </div>
