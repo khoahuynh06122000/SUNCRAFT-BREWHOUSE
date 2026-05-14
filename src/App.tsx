@@ -383,6 +383,12 @@ export default function App() {
   const [user, setUser] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+    setNotification({ message, type });
+    setTimeout(() => setNotification(null), 3000);
+  };
   const [activeTab, setActiveTab] = useState('dashboard');
   const [reportSubTab, setReportSubTab] = useState<'summary' | 'in' | 'out'>('summary');
   const [timeFilter, setTimeFilter] = useState<'day' | 'week' | 'month' | 'year' | 'all'>('all');
@@ -581,8 +587,8 @@ export default function App() {
       }
 
       await batch.commit();
-      alert("Tin đã dọn dẹp xong " + count + " mục dữ liệu! Hệ thống hiện đã sẵn sàng để anh nhập liệu mới.");
       setLoading(false);
+      showNotification('Hệ thống cập nhật data thành công');
     } catch (error) {
       console.error("Hard Reset Error:", error);
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -607,7 +613,8 @@ export default function App() {
         batch.set(doc(db, 'partners', p.id), p);
       });
       await batch.commit();
-      alert("Tin đã khôi phục danh sách Đối tác thành công rồi anh nhé!");
+      setLoading(false);
+      showNotification('Khôi phục danh sách Đối tác thành công');
     } catch (error) {
       console.error("Restore Partners Error:", error);
       alert("Có lỗi khi khôi phục đối tác. Anh kiểm tra lại kết nối mạng hoặc phân quyền nhé.");
@@ -689,15 +696,16 @@ export default function App() {
       
       if (deletePromises.length > 0) {
         await Promise.all(deletePromises);
-        alert(`Đã xóa sạch toàn bộ ${deletePromises.length} dòng dữ liệu doanh thu.`);
+        setLoading(false);
+        showNotification(`Đã xóa sạch toàn bộ ${deletePromises.length} dòng dữ liệu doanh thu.`);
       } else {
-        alert('Hệ thống hiện không có dữ liệu doanh thu nào để xóa.');
+        setLoading(false);
+        showNotification('Hệ thống hiện không có dữ liệu doanh thu nào để xóa.');
       }
     } catch (err) {
       console.error(err);
-      alert('Lỗi khi xóa dữ liệu doanh thu.');
-    } finally {
       setLoading(false);
+      showNotification('Lỗi khi xóa dữ liệu doanh thu.', 'error');
     }
   };
 
@@ -852,17 +860,17 @@ export default function App() {
           return Promise.all(newRecordsPromises);
         }).then(() => {
           setActiveTab('revenue-mgmt');
-          alert(`Cập nhật thành công!\n- Đã xóa dữ liệu cũ của ${incomingInvoices.size} hóa đơn (${cleanedRecordCount} dòng).\n- Đã nạp mới: ${newAddedCount} dòng từ file.`);
           setLoading(false);
+          showNotification('Hệ thống cập nhật data thành công');
           if (revenueInputRef.current) revenueInputRef.current.value = '';
         }).catch(err => {
           console.error(err);
-          alert('Lỗi khi cập nhật dữ liệu. Vui lòng thử lại.');
           setLoading(false);
+          showNotification('Lỗi khi cập nhật dữ liệu. Vui lòng thử lại.', 'error');
         });
       } catch (err) {
         console.error('Error parsing file:', err);
-        alert('Có lỗi xảy ra khi nạp dữ liệu lên Cloud.');
+        showNotification('Có lỗi xảy ra khi nạp dữ liệu lên Cloud.', 'error');
       }
     };
     reader.readAsBinaryString(file);
@@ -949,12 +957,12 @@ export default function App() {
 
       if (failCount > 0) {
         if (successCount > 0) {
-          alert(`Đã dọn dẹp được ${successCount} mục, nhưng có ${failCount} mục thất bại. Có thể do dữ liệu không tồn tại hoặc lỗi quyền hạn ạ.`);
+          showNotification(`Đã dọn dẹp được ${successCount} mục, nhưng có ${failCount} mục thất bại.`, 'error');
         } else {
           handleFirestoreError(new Error("Missing or insufficient permissions"), 'delete', 'transactions/*');
         }
       } else {
-        alert("Đã dọn dẹp sạch sẽ dữ liệu đồng bộ cũ rồi anh nhé! Bây giờ anh có thể tự nạp tay ạ.");
+        showNotification("Đã dọn dẹp sạch sẽ dữ liệu đồng bộ cũ.");
       }
     } catch (err: any) {
       console.error(err);
@@ -1055,12 +1063,13 @@ export default function App() {
             successCount++;
           }
         }
-        alert(`Đã nhập xong dữ liệu cho ${successCount} sản phẩm với phân bổ FIFO.`);
+        setLoading(false);
+        showNotification('Hệ thống cập nhật data thành công');
       } catch (err) {
         console.error(err);
-        alert("Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng.");
-      } finally {
         setLoading(false);
+        showNotification("Lỗi khi đọc file Excel. Vui lòng kiểm tra định dạng.", "error");
+      } finally {
         if (event.target) event.target.value = '';
       }
     };
@@ -1248,7 +1257,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       setActualReceivedQty(0);
       setLossReason('');
       setLossEvidencePhoto('');
-      alert('Đã xác nhận hoàn thành đơn hàng.');
+      showNotification('Hệ thống cập nhật data thành công');
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, selectedInTransit ? `transactions/${selectedInTransit.id}` : 'transactions');
     } finally {
@@ -1979,12 +1988,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
         items: [{ productId: products[0]?.id || '', quantity: 0, batchNumber: '' }]
       });
       
-      alert(`Anh Khoa ơi, Tin đã ghi nhận xong ${validItems.length} mặt hàng rồi ạ!`);
+      setLoading(false);
+      showNotification('Hệ thống cập nhật data thành công');
     } catch (err) {
       console.error(err);
-      alert('Có lỗi xảy ra khi lưu giao dịch. Anh kiểm tra lại kết nối nhé! (Lỗi: ' + (err instanceof Error ? err.message : 'Unknown') + ')');
-    } finally {
       setLoading(false);
+      showNotification('Lỗi khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!', 'error');
     }
   };
 
@@ -2002,11 +2011,11 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       for (const t of transactions) {
         await deleteDoc(doc(db, 'transactions', t.id));
       }
-      alert("Đã xóa sạch bóng giao dịch rồi anh nhé! Sẵn sàng nạp mới ạ.");
-    } catch (err) {
-      handleFirestoreError(err, OperationType.DELETE, 'transactions');
-    } finally {
       setLoading(false);
+      showNotification("Đã xóa sạch toàn bộ lịch sử giao dịch.");
+    } catch (err) {
+      setLoading(false);
+      handleFirestoreError(err, OperationType.DELETE, 'transactions');
     }
   };
 
@@ -2019,7 +2028,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     
     try {
       await deleteDoc(doc(db, 'transactions', id));
-      alert("Đã xóa giao dịch thành công!");
+      showNotification('Đã xóa giao dịch thành công');
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `transactions/${id}`);
     }
@@ -2185,6 +2194,23 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   return (
     <div className="flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden">
+      {/* Non-blocking Notification */}
+      {notification && (
+        <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] pointer-events-none">
+          <div className={cn(
+            "px-6 py-3 rounded-2xl shadow-2xl border backdrop-blur-xl animate-in fade-in slide-in-from-bottom-5 duration-300",
+            notification.type === 'success' 
+              ? "bg-emerald-500/90 text-white border-emerald-400" 
+              : "bg-rose-500/90 text-white border-rose-400"
+          )}>
+            <div className="flex items-center gap-3">
+              {notification.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+              <span className="font-bold text-sm tracking-tight">{notification.message}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar Overlay (Mobile) */}
       {sidebarOpen && (
         <div 
