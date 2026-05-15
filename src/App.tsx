@@ -813,7 +813,7 @@ export default function App() {
             invoiceNumber: invNumber,
             deptCode: String(row['Mã BP'] || row['Bộ phận'] || row['Mã phòng ban'] || ''),
             partnerName: officialPartner ? officialPartner.name : excelPartnerName,
-            partnerId: officialPartner?.id
+            partnerId: officialPartner?.id || ''
           };
 
           const deterministicId = `rev-${record.invoiceNumber || 'INV'}-${idx}-${Date.now()}`;
