@@ -2,12 +2,12 @@
   "entities": {
     "Transaction": {
       "title": "Transaction",
-      "description": "Inventory movement records (IN/OUT)",
+      "description": "Inventory movement records (IN, OUT, OPENING, LOSS, DAMAGE)",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
-        "type": { "type": "string", "enum": ["IN", "OUT"] },
+        "type": { "type": "string", "enum": ["IN", "OUT", "OPENING", "LOSS", "DAMAGE"] },
         "productId": { "type": "string" },
         "productName": { "type": "string" },
         "category": { "type": "string" },
@@ -17,7 +17,11 @@
         "notes": { "type": "string" },
         "batchNumber": { "type": "string" },
         "evidencePhotoUrl": { "type": "string" },
-        "createdBy": { "type": "string" }
+        "createdBy": { "type": "string" },
+        "status": { "type": "string", "enum": ["completed", "in_transit"] },
+        "originalQuantity": { "type": "number" },
+        "deliveryDate": { "type": "string" },
+        "referenceGroupId": { "type": "string" }
       },
       "required": ["id", "date", "type", "productId", "quantity", "createdBy"]
     },

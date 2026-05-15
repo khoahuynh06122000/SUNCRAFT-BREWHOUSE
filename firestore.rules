@@ -44,12 +44,12 @@ service cloud.firestore {
     // 1. Transactions (Inventory IN/OUT)
     function isValidTransaction(data) {
       return data.keys().hasAll(['id', 'date', 'type', 'productId', 'quantity', 'createdBy']) &&
-             data.id is string && data.id.size() <= 128 &&
+             data.id is string &&
              data.date is string &&
-             data.type in ['IN', 'OUT'] &&
+             data.type in ['IN', 'OUT', 'OPENING', 'LOSS', 'DAMAGE'] &&
              data.productId is string &&
-             data.quantity is number && data.quantity >= 0 &&
-             data.createdBy is string && data.createdBy.size() <= 200;
+             data.quantity is number &&
+             data.createdBy is string;
     }
 
     match /transactions/{transactionId} {

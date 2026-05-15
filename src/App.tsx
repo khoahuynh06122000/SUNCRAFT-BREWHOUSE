@@ -1535,7 +1535,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
         if (t.date && t.date < existing.importDate) {
           existing.importDate = t.date;
         }
-      } else if ((t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') && t.status !== 'in_transit') {
+      } else if (t.type === 'OUT' || t.type === 'LOSS' || t.type === 'DAMAGE') {
+        // Deduction regardless of status (in_transit means it's out of warehouse)
         existing.stock -= qty;
         if (t.date && (!existing.lastExportDate || t.date > existing.lastExportDate)) {
           existing.lastExportDate = t.date;
@@ -2093,6 +2094,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     } catch (err) {
       console.error(err);
       setLoading(false);
+      handleFirestoreError(err, OperationType.WRITE, 'transactions');
       showNotification('Lỗi khi lưu giao dịch. Anh kiểm tra lại kết nối nhé!', 'error');
     }
   };
