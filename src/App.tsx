@@ -185,14 +185,29 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 // --- Components ---
 
+const parseDateSafe = (dateStr: any): Date => {
+  if (!dateStr) return new Date();
+  if (dateStr instanceof Date && !isNaN(dateStr.getTime())) return dateStr;
+  
+  const trimmed = String(dateStr).trim();
+  
+  // Try ISO first
+  const isoDate = parseISO(trimmed);
+  if (isValid(isoDate)) return isoDate;
+  
+  // Common formats in Vietnam
+  const formats = ['dd/MM/yyyy', 'dd.MM.yyyy', 'dd-MM-yyyy', 'yyyy-MM-dd', 'dd/MM/yy', 'd/M/yyyy'];
+  for (const fmt of formats) {
+    const parsedDate = parse(trimmed, fmt, new Date());
+    if (isValid(parsedDate)) return parsedDate;
+  }
+  
+  const fallback = new Date(trimmed);
+  return isValid(fallback) ? fallback : new Date();
+};
+
 const parseExcelDate = (val: any): string => {
   if (!val) return new Date().toISOString();
-  
-  // If it's already a date object
-  if (val instanceof Date && !isNaN(val.getTime())) {
-    val.setHours(0, 0, 0, 0);
-    return val.toISOString();
-  }
   
   // If it's a number (Excel date serial)
   if (typeof val === 'number') {
@@ -202,36 +217,9 @@ const parseExcelDate = (val: any): string => {
     return date.toISOString();
   }
   
-  // If it's a string, try various formats
-  if (typeof val === 'string') {
-    const trimmed = val.trim();
-    if (!trimmed) {
-      const d = new Date();
-      d.setHours(0, 0, 0, 0);
-      return d.toISOString();
-    }
-    
-    // Try ISO first
-    const isoDate = parseISO(trimmed);
-    if (isValid(isoDate)) {
-      isoDate.setHours(0, 0, 0, 0);
-      return isoDate.toISOString();
-    }
-    
-    // Common formats in Vietnam
-    const formats = ['dd/MM/yyyy', 'dd-MM-yyyy', 'yyyy-MM-dd', 'dd/MM/yy', 'd/M/yyyy'];
-    for (const fmt of formats) {
-      const parsedDate = parse(trimmed, fmt, new Date());
-      if (isValid(parsedDate)) {
-        parsedDate.setHours(0, 0, 0, 0);
-        return parsedDate.toISOString();
-      }
-    }
-  }
-  
-  const finalDate = new Date();
-  finalDate.setHours(0, 0, 0, 0);
-  return finalDate.toISOString();
+  const date = parseDateSafe(val);
+  date.setHours(0, 0, 0, 0);
+  return date.toISOString();
 };
 
 const formatDisplayDate = (dateStr: string) => {
@@ -709,6 +697,37 @@ export default function App() {
     }
   };
 
+  const downloadRevenueTemplate = () => {
+    const templateData = [{
+      'Ngày hóa đơn': '14.05.2026',
+      'Đơn vị': 'BNC',
+      'Tên hàng hóa': 'Bia Golden Bridge Helles Lager',
+      'Đơn vị tính': 'LIT',
+      'Số lượng': 13805.10,
+      'Đơn giá': 30000,
+      'Thành tiền': 414153000,
+      'VAT': 41415300,
+      'Thành tiền sau thuế': 455568300,
+      'Số hóa đơn': 'C26TKB#00000093'
+    }, {
+      'Ngày hóa đơn': '14.05.2026',
+      'Đơn vị': 'BNG',
+      'Tên hàng hóa': 'Bia Wings Dark Lager 330ml',
+      'Đơn vị tính': 'LON',
+      'Số lượng': 72.00,
+      'Đơn giá': 14000,
+      'Thành tiền': 1008000,
+      'VAT': 100800,
+      'Thành tiền sau thuế': 1108800,
+      'Số hóa đơn': 'C26TKB#00000094'
+    }];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mau_Doanh_Thu");
+    XLSX.writeFile(wb, "Mau_Nap_Doanh_Thu_TinTin.xlsx");
+    showNotification("Đã tải file mẫu thành công. Anh dùng file này để nạp nhé!");
+  };
+
   const handleRevenueReportUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -779,15 +798,24 @@ export default function App() {
             return;
           }
 
-          const dateVal = row['Ngày xuất hoá đơn'] || row['Ngày hóa đơn (ngày nhận)'] || row['Ngày giao bia'] || row['Ngày'] || row['Date'] || row['Ngày chứng từ'];
+          const dateVal = row['Ngày hóa đơn'] || row['Ngày xuất hoá đơn'] || row['Ngày hóa đơn (ngày nhận)'] || row['Ngày giao bia'] || row['Ngày'] || row['Date'] || row['Ngày chứng từ'];
           const excelPartnerName = String(
             row['Đơn vị thụ hưởng'] || 
             row['Đơn vị'] || 
+            row['Don vi'] ||
+            row['Mã đơn vị'] ||
+            row['Ma don vi'] ||
+            row['Tên đơn vị'] ||
+            row['Ten don vi'] ||
             row['Partner'] || 
             row['Khách hàng'] || 
+            row['Khach hang'] ||
             row['Mã KH'] || 
+            row['Ma KH'] ||
             row['Đối tác'] ||
+            row['Doi tac'] ||
             row['Tên đối tác'] ||
+            row['Ten doi tac'] ||
             row['Customer'] ||
             '—'
           ).trim();
@@ -1305,31 +1333,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
     return revenueData.filter(r => {
       try {
-        let date: Date;
-        const dateStr = String(r.date).trim();
-        
-        // Try ISO first
-        const isoDate = parseISO(dateStr);
-        if (isValid(isoDate)) {
-          date = isoDate;
-        } else {
-          // Try common Vietnamese formats if ISO fails
-          const formats = ['dd/MM/yyyy', 'dd-MM-yyyy', 'yyyy-MM-dd', 'dd/MM/yy', 'd/M/yyyy'];
-          let foundDate = null;
-          for (const fmt of formats) {
-            const parsedDate = parse(dateStr, fmt, new Date());
-            if (isValid(parsedDate)) {
-              foundDate = parsedDate;
-              break;
-            }
-          }
-          if (foundDate) {
-            date = foundDate;
-          } else {
-            return false;
-          }
-        }
-        
+        const date = parseDateSafe(r.date);
         return isWithinInterval(date, { start, end });
       } catch {
         return false;
@@ -1370,7 +1374,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
 
     return Array.from(groups.values()).sort((a, b) => {
-      return new Date(b.date).getTime() - new Date(a.date).getTime();
+      return parseDateSafe(b.date).getTime() - parseDateSafe(a.date).getTime();
     });
   }, [filteredRevenueByTime, revenuePartnerSearch]);
 
@@ -2052,12 +2056,24 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     }
   }, [user, activeTab, navItems]);
 
-  if (loading) {
+  if (loading && !user) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-6">
-          <div className="w-16 h-16 border-4 border-white/20 border-t-white rounded-full animate-spin" />
-          <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.4em]">Đang kết nối dữ liệu...</p>
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
+        {/* Superior Background Architecture */}
+        <div className="absolute top-0 right-0 w-[1000px] h-[1000px] bg-primary/20 blur-[160px] rounded-full -mr-[500px] -mt-[500px] pointer-events-none" />
+        <div className="absolute bottom-0 left-0 w-[800px] h-[800px] bg-emerald-500/10 blur-[130px] rounded-full -ml-[400px] -mb-[400px] pointer-events-none" />
+        
+        <div className="flex flex-col items-center gap-12 relative z-10">
+          <div className="relative">
+            <div className="w-24 h-24 border-4 border-white/5 border-t-amber-500 rounded-full animate-spin" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Beer className="w-8 h-8 text-amber-500/50 animate-pulse" />
+            </div>
+          </div>
+          <div className="text-center space-y-4">
+            <h1 className="text-4xl font-black text-white tracking-widest font-serif italic uppercase">Bia Bà Nà</h1>
+            <p className="text-white/30 text-[10px] font-black uppercase tracking-[0.5em] animate-pulse">Đang kết nối hệ thống dữ liệu...</p>
+          </div>
         </div>
       </div>
     );
@@ -2169,7 +2185,28 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   }
 
   return (
-    <div className="flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden">
+    <div className={cn(
+      "flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden transition-all duration-300",
+      loading && user ? "blur-[2px] pointer-events-none select-none brightness-95" : ""
+    )}>
+      {/* Processing Overlay */}
+      {loading && user && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white/5 backdrop-blur-[1px]">
+          <div className="bg-white/90 backdrop-blur-3xl p-8 rounded-[40px] shadow-2xl border border-white flex flex-col items-center gap-6 scale-up-center">
+            <div className="relative">
+              <div className="w-16 h-16 border-[5px] border-slate-100 border-t-primary rounded-full animate-spin" />
+              <div className="absolute inset-0 flex items-center justify-center">
+                 <RefreshCw className="w-6 h-6 text-primary/30 animate-spin-slow" />
+              </div>
+            </div>
+            <div className="text-center">
+              <p className="text-[11px] font-black text-slate-900 uppercase tracking-[0.3em] mb-1">Tin Tin đang xử lý</p>
+              <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Vui lòng đợi trong giây lát...</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Non-blocking Notification */}
       {notification && (
         <div className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[200] pointer-events-none">
@@ -3427,6 +3464,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                               <Download className="w-4 h-4 text-primary" /> Xuất Excel Doanh thu
                            </button>
                            <button 
+                             className="flex items-center gap-2 px-6 py-3 bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-amber-200 hover:scale-105 active:scale-95 transition-all"
+                             onClick={downloadRevenueTemplate}
+                           >
+                              <Download className="w-4 h-4" /> Tải File Mẫu
+                           </button>
+                           <button 
                              className="flex items-center gap-2 px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
                              onClick={() => revenueInputRef.current?.click()}
                            >
@@ -3712,12 +3755,20 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                              <h4 className="text-xl font-black text-slate-900">Sẵn sàng phân tích doanh thu</h4>
                              <p className="text-sm text-slate-400 max-w-sm mx-auto font-bold uppercase tracking-wider">Chọn file Excel báo cáo từ đại lý để bắt đầu quy trình đối soát.</p>
                            </div>
-                           <button 
-                             className="px-8 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all mt-4"
-                             onClick={() => revenueInputRef.current?.click()}
-                           >
-                             Tải lên hồ sơ doanh thu
-                           </button>
+                           <div className="flex gap-4 mt-4">
+                             <button 
+                               className="px-8 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20 hover:scale-105 active:scale-95 transition-all"
+                               onClick={() => revenueInputRef.current?.click()}
+                             >
+                               Tải lên hồ sơ doanh thu
+                             </button>
+                             <button 
+                               className="px-8 py-3 bg-amber-500 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-amber-200 hover:scale-105 active:scale-95 transition-all"
+                               onClick={downloadRevenueTemplate}
+                             >
+                               Tải File Excel Mẫu
+                             </button>
+                           </div>
                         </Card>
                       )}
                     </div>
