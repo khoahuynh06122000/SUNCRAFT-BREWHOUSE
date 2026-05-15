@@ -54,7 +54,8 @@ service cloud.firestore {
 
     match /transactions/{transactionId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidTransaction(incoming());
+      allow create: if isSignedIn() && isValidTransaction(incoming());
+      allow update: if isSignedIn();
       allow delete: if isKhoa();
     }
 

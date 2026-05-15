@@ -49,7 +49,8 @@ import {
   PackageSearch,
   FileUp,
   Beer,
-  Sun
+  Sun,
+  Loader2
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -315,7 +316,7 @@ const StatCard = ({ title, value, unit, icon: Icon, color = 'primary', subtitle,
   </Card>
 );
 
-const Button = ({ children, className, variant = 'primary', ...props }: any) => {
+const Button = ({ children, className, variant = 'primary', loading, ...props }: any) => {
   const variants = {
     primary: "bg-primary text-white hover:bg-primary-dark shadow-lg shadow-primary/25 active:scale-[0.97]",
     secondary: "bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-[0.97]",
@@ -330,8 +331,10 @@ const Button = ({ children, className, variant = 'primary', ...props }: any) => 
         variants[variant as keyof typeof variants],
         className
       )} 
+      disabled={loading || props.disabled}
       {...props}
     >
+      {loading && <Loader2 className="w-4 h-4 animate-spin" />}
       {children}
     </button>
   );
@@ -1121,25 +1124,29 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 };
 
   const getFIFOAllocations = (productId: string, quantity: number, currentBatches: BatchInfo[]) => {
-    const allocations: { batchNumber: string, quantity: number }[] = [];
+    const allocations: { batchNumber: string, quantity: number, category?: string }[] = [];
     let remaining = quantity;
     
     // Process batches for this product that have stock
     const relevant = currentBatches
       .filter(b => b.productId === productId && b.stock > 0)
-      .sort((a, b) => new Date(a.importDate).getTime() - new Date(b.importDate).getTime());
+      .sort((a, b) => {
+        const timeA = new Date(a.importDate).getTime();
+        const timeB = new Date(b.importDate).getTime();
+        return timeA - timeB;
+      });
 
     for (const b of relevant) {
       if (remaining <= 0) break;
       const taken = Math.min(b.stock, remaining);
-      allocations.push({ batchNumber: b.batchNumber, quantity: taken });
+      allocations.push({ batchNumber: b.batchNumber, quantity: taken, category: b.category });
       remaining -= taken;
       // Update local copy so subsequent items in the same sync loop see updated state
       b.stock -= taken; 
     }
 
     if (remaining > 0) {
-      allocations.push({ batchNumber: 'VUOT_DINH_MUC', quantity: remaining });
+      allocations.push({ batchNumber: 'VUOT_DINH_MUC', quantity: remaining, category: '?' });
     }
     return allocations;
   };
@@ -1271,7 +1278,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       setLossEvidencePhoto('');
       showNotification('Hệ thống cập nhật data thành công');
     } catch (err) {
+      console.error("Lỗi hoàn tất đơn đi đường:", err);
       handleFirestoreError(err, OperationType.WRITE, selectedInTransit ? `transactions/${selectedInTransit.id}` : 'transactions');
+      showNotification('Không thể hoàn tất đơn hàng. Anh kiểm tra lại kết nối mạng nhé!', 'error');
     } finally {
       setLoading(false);
     }
@@ -4146,6 +4155,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                               <Button 
                                 className={`flex-[2] ${actualReceivedQty < selectedInTransit.quantity ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-500 hover:bg-emerald-600'}`} 
                                 onClick={handleReportLoss}
+                                loading={loading}
+                                disabled={loading}
                               >
                                 {actualReceivedQty < selectedInTransit.quantity ? 'Xác nhận điều chỉnh' : 'Hoàn thành ghi nhận'}
                               </Button>
@@ -4313,7 +4324,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                   <div className="sm:col-span-5">
                                     <Select 
                                       label={`Sản phẩm ${index + 1}`}
-                                      options={products.map(p => ({ value: p.id, label: `${p.name} (${p.category})` }))}
+                                      options={products.map(p => ({ value: p.id, label: `${p.name} — [${p.category.toUpperCase()}] (${p.unit})` }))}
                                       value={item.productId}
                                       onChange={(e: any) => updateTransactionItem(index, { productId: e.target.value })}
                                     />
@@ -4336,11 +4347,29 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                         onChange={(e: any) => updateTransactionItem(index, { batchNumber: e.target.value })}
                                       />
                                     )}
-                                    {activeTab === 'export' && (
-                                      <div className="text-[10px] font-mono font-black text-rose-500 bg-rose-50/50 px-3 py-3.5 rounded-xl border border-rose-100">
-                                        FIFO: {item.batchNumber || 'TỰ ĐỘNG'}
-                                      </div>
-                                    )}
+                                    {activeTab === 'export' && (() => {
+                                      const selectedBatch = batches.find(b => b.productId === item.productId && b.batchNumber === item.batchNumber);
+                                      const currentProduct = products.find(p => p.id === item.productId);
+                                      const isMismatch = selectedBatch && currentProduct && selectedBatch.category !== currentProduct.category;
+                                      
+                                      return (
+                                        <div className={cn(
+                                          "text-[10px] font-mono font-black px-3 py-3 rounded-xl border flex flex-col gap-1",
+                                          isMismatch ? "text-amber-600 bg-amber-50 border-amber-200" : "text-rose-500 bg-rose-50/50 border-rose-100"
+                                        )}>
+                                          <div className="flex items-center justify-between">
+                                            <span>FIFO: {item.batchNumber || 'TỰ ĐỘNG'}</span>
+                                            {selectedBatch && <span className="opacity-40">{selectedBatch.category}</span>}
+                                          </div>
+                                          {isMismatch && (
+                                            <div className="text-[8px] flex items-center gap-1.5 mt-0.5 text-amber-500 uppercase">
+                                              <AlertTriangle className="w-3 h-3" />
+                                              Mã lô khác hệ sản phẩm ({selectedBatch.category} vs {currentProduct.category})
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                   </div>
                                 </div>
                               </div>
