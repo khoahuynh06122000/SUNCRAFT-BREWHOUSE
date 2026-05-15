@@ -66,7 +66,8 @@ import {
   LineChart,
   Line,
   AreaChart,
-  Area
+  Area,
+  ComposedChart
 } from 'recharts';
 
 import { 
@@ -1340,6 +1341,76 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       }
     });
   }, [revenueData, timeFilter, filterBaseDate]);
+
+  const previousRevenueByTime = useMemo(() => {
+    if (timeFilter === 'all') return [];
+    
+    let start: Date;
+    let end: Date;
+
+    if (timeFilter === 'day') {
+      start = startOfDay(subDays(filterBaseDate, 1));
+      end = endOfDay(subDays(filterBaseDate, 1));
+    } else if (timeFilter === 'week') {
+      start = startOfWeek(subWeeks(filterBaseDate, 1), { weekStartsOn: 1 });
+      end = endOfWeek(subWeeks(filterBaseDate, 1), { weekStartsOn: 1 });
+    } else if (timeFilter === 'month') {
+      start = startOfMonth(subMonths(filterBaseDate, 1));
+      end = endOfMonth(subMonths(filterBaseDate, 1));
+    } else {
+      start = startOfYear(subYears(filterBaseDate, 1));
+      end = endOfYear(subYears(filterBaseDate, 1));
+    }
+
+    return revenueData.filter(r => {
+      try {
+        const date = parseDateSafe(r.date);
+        return isWithinInterval(date, { start, end });
+      } catch {
+        return false;
+      }
+    });
+  }, [revenueData, timeFilter, filterBaseDate]);
+
+  const cfoMetrics = useMemo(() => {
+    const currentRev = filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0);
+    const prevRev = previousRevenueByTime.reduce((a, b) => a + b.totalAmount, 0);
+    const growth = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : 0;
+
+    const currentQty = filteredRevenueByTime.reduce((a, b) => a + b.quantity, 0);
+    const prevQty = previousRevenueByTime.reduce((a, b) => a + b.quantity, 0);
+    const qtyGrowth = prevQty > 0 ? ((currentQty - prevQty) / prevQty) * 100 : 0;
+
+    // ARPU (Avg Revenue Per Unit)
+    const arpu = currentQty > 0 ? (currentRev / currentQty) : 0;
+    const prevArpu = prevQty > 0 ? (prevRev / prevQty) : 0;
+    const arpuGrowth = prevArpu > 0 ? ((arpu - prevArpu) / prevArpu) * 100 : 0;
+
+    // Customer Concentration (Pareto)
+    const partnerGroups = filteredRevenueByTime.reduce((acc: any, curr) => {
+      acc[curr.partnerName] = (acc[curr.partnerName] || 0) + curr.totalAmount;
+      return acc;
+    }, {});
+    const sortedPartners = Object.entries(partnerGroups)
+      .map(([name, value]) => ({ name, value: value as number }))
+      .sort((a, b) => b.value - a.value);
+    
+    let cumulative = 0;
+    const top20Count = Math.ceil(sortedPartners.length * 0.2);
+    const top20Rev = sortedPartners.slice(0, top20Count).reduce((a, b) => a + b.value, 0);
+    const concentration = currentRev > 0 ? (top20Rev / currentRev) * 100 : 0;
+
+    return {
+      totalRevenue: currentRev,
+      revGrowth: growth,
+      totalQuantity: currentQty,
+      qtyGrowth,
+      arpu,
+      arpuGrowth,
+      concentration,
+      partnerStats: sortedPartners
+    };
+  }, [filteredRevenueByTime, previousRevenueByTime]);
 
   const groupedRevenue = useMemo(() => {
     const groups = new Map<string, {
@@ -3480,152 +3551,220 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
                       {revenueData.length > 0 ? (
                         <>
-                          {/* Phân tích Doanh thu Chuyên sâu (Dashboard) */}
-                          <div className="space-y-6 mb-8">
-                            {/* Summary Metrics */}
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-slate-900">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng DT Gộp</p>
-                                <p className="text-xl font-black text-slate-900">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0))}</p>
-                                <p className="text-[8px] font-bold text-emerald-500 mt-1">Ghi nhận từ HĐ</p>
+                            {/* Phân tích Doanh thu Chuyên sâu (CFO Dashboard) */}
+                            <div className="space-y-8">
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                                <StatCard 
+                                  title="Tổng Doanh thu Gộp"
+                                  value={formatNumber(cfoMetrics.totalRevenue)}
+                                  unit="VND"
+                                  icon={DollarSign}
+                                  color="primary"
+                                  trend={timeFilter !== 'all' ? `${cfoMetrics.revGrowth >= 0 ? '+' : ''}${cfoMetrics.revGrowth.toFixed(1)}%` : null}
+                                  subtitle={`${timeFilter !== 'all' ? 'So với kỳ trước' : 'Tổng quan tích lũy'}`}
+                                />
+                                <StatCard 
+                                  title="Sản lượng tiêu thụ"
+                                  value={formatNumber(cfoMetrics.totalQuantity)}
+                                  unit={filteredRevenueByTime[0]?.unit || 'ĐV'}
+                                  icon={Package}
+                                  color="green"
+                                  trend={timeFilter !== 'all' ? `${cfoMetrics.qtyGrowth >= 0 ? '+' : ''}${cfoMetrics.qtyGrowth.toFixed(1)}%` : null}
+                                  subtitle="Năng lực cung ứng"
+                                />
+                                <StatCard 
+                                  title="Giá trị TB / Đơn vị (ARPU)"
+                                  value={formatNumber(Math.round(cfoMetrics.arpu))}
+                                  unit="VND"
+                                  icon={TrendingUp}
+                                  color="amber"
+                                  trend={timeFilter !== 'all' ? `${cfoMetrics.arpuGrowth >= 0 ? '+' : ''}${cfoMetrics.arpuGrowth.toFixed(1)}%` : null}
+                                  subtitle="Hiệu quả đơn giá"
+                                />
+                                <StatCard 
+                                  title="Index Tập trung KH"
+                                  value={`${cfoMetrics.concentration.toFixed(1)}`}
+                                  unit="%"
+                                  icon={Users}
+                                  color="rose"
+                                  subtitle="Top 20% KH đóng góp DT"
+                                />
                               </div>
-                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-emerald-500">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Sản lượng (ĐV)</p>
-                                <p className="text-xl font-black text-emerald-600">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.quantity, 0))}</p>
-                                <p className="text-[8px] font-bold text-slate-300 mt-1">Tổng số đơn vị bán ra</p>
-                              </div>
-                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-indigo-500">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Số lượng HĐ</p>
-                                <p className="text-xl font-black text-slate-900">{groupedRevenue.length}</p>
-                                <p className="text-[8px] font-bold text-slate-300 mt-1">Giao dịch trong kỳ</p>
-                              </div>
-                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-amber-500">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Giá trị trung bình</p>
-                                <p className="text-xl font-black text-amber-600">{formatNumber(groupedRevenue.length > 0 ? (filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0) / groupedRevenue.length) : 0)}</p>
-                                <p className="text-[8px] font-bold text-slate-300 mt-1">Bình quân / Hóa đơn</p>
-                              </div>
+
+                            {/* CFO Advanced Insights Row */}
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                              <Card title="Cơ cấu Sản phẩm & Đối tác (Strategic Mix)" className="lg:col-span-2">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-12 mt-6">
+                                  <div className="space-y-6">
+                                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4">I. Tỷ trọng doanh thu theo SKU</p>
+                                    <div className="h-[280px] w-full">
+                                      <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart 
+                                          layout="vertical"
+                                          data={
+                                            Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
+                                              acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
+                                              return acc;
+                                            }, {}))
+                                            .map(([name, value]) => ({ name, value: value as number }))
+                                            .sort((a, b) => b.value - a.value)
+                                            .slice(0, 5)
+                                          }
+                                          margin={{ left: 0, right: 30 }}
+                                        >
+                                          <XAxis type="number" hide />
+                                          <YAxis 
+                                            dataKey="name" 
+                                            type="category" 
+                                            fontSize={10} 
+                                            width={110} 
+                                            axisLine={false} 
+                                            tickLine={false} 
+                                            tick={{ fill: '#475569', fontWeight: 700 }} 
+                                          />
+                                          <Tooltip 
+                                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}
+                                            formatter={(val: number) => formatNumber(val) + ' đ'}
+                                          />
+                                          <Bar dataKey="value" fill="#0f172a" radius={[0, 6, 6, 0]} barSize={24} />
+                                        </BarChart>
+                                      </ResponsiveContainer>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-6">
+                                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] text-center mb-4">II. Top 5 Đối tác trọng điểm</p>
+                                    <div className="h-[280px] w-full">
+                                      <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                          <Pie
+                                            data={cfoMetrics.partnerStats.slice(0, 5)}
+                                            innerRadius={70}
+                                            outerRadius={95}
+                                            paddingAngle={8}
+                                            dataKey="value"
+                                            stroke="none"
+                                          >
+                                            {['#0f172a', '#2563eb', '#10b981', '#f59e0b', '#ec4899'].map((color, index) => (
+                                              <Cell key={`cell-${index}`} fill={color} />
+                                            ))}
+                                          </Pie>
+                                          <Tooltip 
+                                            contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}
+                                            formatter={(val: number) => formatNumber(val) + ' đ'}
+                                          />
+                                          <Legend verticalAlign="bottom" iconType="circle" wrapperStyle={{ fontSize: '11px', fontWeight: 700, paddingTop: '30px' }} />
+                                        </PieChart>
+                                      </ResponsiveContainer>
+                                    </div>
+                                  </div>
+                                </div>
+                              </Card>
+
+                              <Card title="Xếp hạng SKU dẫn đầu">
+                                <div className="space-y-5 mt-4">
+                                  {Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
+                                      acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
+                                      return acc;
+                                    }, {}))
+                                    .map(([name, value]) => ({ name, value: value as number }))
+                                    .sort((a, b) => b.value - a.value)
+                                    .slice(0, 8)
+                                    .map((p, i) => (
+                                      <div key={p.name} className="flex items-center justify-between group py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 px-3 rounded-2xl transition-all">
+                                        <div className="flex items-center gap-4">
+                                          <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-[12px] font-black text-slate-400 group-hover:bg-slate-900 group-hover:text-white transition-all shrink-0">
+                                            {i + 1}
+                                          </div>
+                                          <div className="flex flex-col">
+                                            <span className="text-[13px] font-bold text-slate-800 truncate max-w-[130px]">{p.name}</span>
+                                            <span className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">VP: {(p.value / (cfoMetrics.totalRevenue || 1) * 100).toFixed(1)}%</span>
+                                          </div>
+                                        </div>
+                                        <div className="text-right">
+                                          <p className="text-[13px] font-black text-slate-900">{formatNumber(p.value)}</p>
+                                        </div>
+                                      </div>
+                                    ))
+                                  }
+                                </div>
+                              </Card>
+                            </div>
+
+                            {/* Management Summary Report Section */}
+                            <div className="bg-slate-900 rounded-[48px] p-12 text-white mt-12 shadow-2xl">
+                               <div className="flex flex-col sm:flex-row sm:items-center gap-10 mb-12 pb-10 border-b border-white/10">
+                                  <div className="w-20 h-20 rounded-[28px] bg-white/5 border border-white/10 flex items-center justify-center text-white shrink-0 shadow-2xl">
+                                     <ShieldCheck className="w-12 h-12" />
+                                  </div>
+                                  <div>
+                                     <h4 className="text-3xl font-black tracking-tight mb-1">Báo cáo tóm lược quản trị tài chính</h4>
+                                     <p className="text-[12px] font-bold text-white/30 uppercase tracking-[0.4em]">Trích xuất trực tiếp từ dữ liệu quản trị hệ thống</p>
+                                  </div>
+                               </div>
+                               
+                               <div className="grid grid-cols-1 lg:grid-cols-3 gap-20">
+                                  <div className="space-y-8">
+                                     <h5 className="text-[12px] font-black text-white/20 uppercase tracking-[0.2em] flex items-center gap-3">
+                                        <div className="w-4 h-[1px] bg-white/20" /> I. Doanh thu & Thị trường
+                                     </h5>
+                                     <div className="space-y-8">
+                                        <div className="flex gap-5">
+                                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-2 shrink-0 shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
+                                           <p className="text-[15px] text-white/70 leading-relaxed font-medium">
+                                             Doanh thu thực đạt <span className="font-bold text-white underline decoration-white/20 underline-offset-4">{formatNumber(cfoMetrics.totalRevenue)} đ</span>, 
+                                             biến động <span className={cn("font-bold", cfoMetrics.revGrowth >= 0 ? "text-emerald-400" : "text-rose-400")}>
+                                               {cfoMetrics.revGrowth >= 0 ? 'tăng' : 'giảm'} {Math.abs(cfoMetrics.revGrowth).toFixed(1)}%
+                                             </span> so với kỳ trước.
+                                           </p>
+                                        </div>
+                                        <div className="flex gap-5">
+                                           <div className="w-1.5 h-1.5 rounded-full bg-white/20 mt-2 shrink-0" />
+                                           <p className="text-[15px] text-white/70 leading-relaxed font-medium">
+                                             Hiệu suất đơn giá (ARPU) đạt <span className="font-bold text-white">{formatNumber(Math.round(cfoMetrics.arpu))} đ/ĐV</span>. 
+                                             Thế trận giá bán {cfoMetrics.arpuGrowth >= 0 ? "có sự cải thiện tốt về biên lợi nhuận" : "đang chịu áp lực cạnh tranh"}.
+                                           </p>
+                                        </div>
+                                     </div>
+                                  </div>
+
+                                  <div className="space-y-8 lg:border-l lg:border-white/5 lg:pl-20">
+                                     <h5 className="text-[12px] font-black text-white/20 uppercase tracking-[0.2em] flex items-center gap-3">
+                                        <div className="w-4 h-[1px] bg-white/20" /> II. Khách hàng & Rủi ro
+                                     </h5>
+                                     <div className="space-y-8">
+                                        <div className="flex gap-5">
+                                           <div className="w-1.5 h-1.5 rounded-full bg-white/20 mt-2 shrink-0" />
+                                           <p className="text-[15px] text-white/70 leading-relaxed font-medium">
+                                             Chỉ số tập trung (Concentration Index): <span className="font-bold text-white">{cfoMetrics.concentration.toFixed(1)}%</span>. 
+                                             {cfoMetrics.concentration > 70 ? "Cảnh báo rủi ro tập trung dòng tiền vào nhóm đối tác chiến lược vượt ngưỡng an toàn." : "Cơ cấu đối tác duy trì độ phân tán tối ưu cho dòng tiền."}
+                                           </p>
+                                        </div>
+                                        <div className="flex gap-5">
+                                           <div className="w-1.5 h-1.5 rounded-full bg-white/20 mt-2 shrink-0" />
+                                           <p className="text-[15px] text-white/70 leading-relaxed font-medium">
+                                             Đối tác hạt nhân <span className="font-bold text-white">{cfoMetrics.partnerStats[0]?.name || 'N/A'}</span> đóng góp tỷ trọng lớn nhất với <span className="font-bold text-white">{((cfoMetrics.partnerStats[0]?.value || 0) / (cfoMetrics.totalRevenue || 1) * 100).toFixed(1)}%</span>.
+                                           </p>
+                                        </div>
+                                     </div>
+                                  </div>
+
+                                  <div className="space-y-8 lg:border-l lg:border-white/5 lg:pl-20">
+                                     <h5 className="text-[12px] font-black text-rose-400 uppercase tracking-[0.2em] flex items-center gap-3">
+                                        <div className="w-4 h-[1px] bg-rose-400/20" /> III. Khuyến nghị quản trị
+                                     </h5>
+                                     <div className="bg-white/[0.03] p-10 rounded-[32px] border border-white/5 shadow-inner backdrop-blur-sm">
+                                        <p className="text-[15px] text-white/40 italic leading-relaxed font-medium">
+                                           "{cfoMetrics.concentration > 70 
+                                           ? "Hệ thống khuyến nghị BGĐ ưu tiên chiến lược 'Long-tail' (mở rộng tệp khách hàng tiềm năng để giảm thiểu rủi ro khi đối tác trọng điểm có biến động. Đồng thời siết chặt kiểm soát công nợ cho nhóm Sales dẫn đầu." 
+                                           : "Thực trạng tài chính đang ở vùng ổn định. Khuyến nghị duy trì các chính sách chăm sóc khách hàng trọng điểm và chuẩn bị nguồn lực cho các SKU có dấu hiệu tăng trưởng nhanh."}"
+                                        </p>
+                                     </div>
+                                  </div>
+                               </div>
                             </div>
                           </div>
 
-
-
-                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                            <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl flex flex-col justify-between">
-                              <div className="w-8 h-8 bg-white/10 rounded-lg flex items-center justify-center mb-4">
-                                <DollarSign className="w-4 h-4 text-emerald-400" />
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-white/40">Tổng Doanh thu Gộp</p>
-                                <h3 className="text-2xl font-black">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0))} <span className="text-xs">đ</span></h3>
-                              </div>
-                            </div>
-                            
-                            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
-                              <div className="w-8 h-8 bg-blue-50 rounded-lg flex items-center justify-center mb-4 font-black text-blue-600 text-[10px]">#</div>
-                              <div className="space-y-1">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Quy mô Danh mục (SKU)</p>
-                                <h3 className="text-2xl font-black text-slate-900">{new Set(filteredRevenueByTime.map(r => r.productName)).size} <span className="text-xs text-slate-400">Mã hàng</span></h3>
-                              </div>
-                            </div>
-
-                            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
-                              <div className="w-8 h-8 bg-indigo-50 rounded-lg flex items-center justify-center mb-4">
-                                <Package className="w-4 h-4 text-indigo-500" />
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Tổng sản lượng tiêu thụ</p>
-                                <h3 className="text-2xl font-black text-slate-900">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.quantity, 0))} <span className="text-xs text-slate-400">ĐV</span></h3>
-                              </div>
-                            </div>
-
-                            <div className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm flex flex-col justify-between">
-                              <div className="w-8 h-8 bg-amber-50 rounded-lg flex items-center justify-center mb-4">
-                                <ArrowUpRight className="w-4 h-4 text-amber-500" />
-                              </div>
-                              <div className="space-y-1">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Đơn hàng Lớn nhất</p>
-                                <h3 className="text-2xl font-black text-slate-900">{formatNumber(filteredRevenueByTime.length > 0 ? Math.max(...filteredRevenueByTime.map(r => r.totalAmount)) : 0)} <span className="text-xs text-slate-400">đ</span></h3>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                            <Card title="Cơ cấu Doanh thu" className="premium-shadow">
-                              <div className="h-[250px] sm:h-[380px] w-full mt-4 sm:mt-6">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <BarChart 
-                                    layout="vertical"
-                                    data={
-                                      Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                        acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
-                                        return acc;
-                                      }, {}))
-                                      .map(([name, value]) => ({ name, value: value as number }))
-                                      .sort((a, b) => b.value - a.value)
-                                      .slice(0, 5)
-                                    }
-                                    margin={{ left: 10, right: 40, top: 10, bottom: 10 }}
-                                  >
-                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
-                                    <XAxis type="number" hide />
-                                    <YAxis 
-                                      dataKey="name" 
-                                      type="category" 
-                                      fontSize={window.innerWidth < 640 ? 8 : 10} 
-                                      width={window.innerWidth < 640 ? 80 : 140} 
-                                      axisLine={false} 
-                                      tickLine={false}
-                                      tick={{ fill: '#64748b', fontWeight: 700 }}
-                                    />
-                                    <Tooltip 
-                                      formatter={(value: any) => formatNumber(value as number) + ' đ'}
-                                      cursor={{ fill: '#f8fafc' }}
-                                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', fontSize: '10px' }}
-                                    />
-                                    <Bar dataKey="value" fill="#0f172a" radius={[0, 6, 6, 0]} barSize={window.innerWidth < 640 ? 12 : 24} />
-                                  </BarChart>
-                                </ResponsiveContainer>
-                              </div>
-                            </Card>
-
-                            <Card title="Khách hàng chiến lược" className="premium-shadow">
-                              <div className="h-[250px] sm:h-[380px] w-full mt-4 sm:mt-6">
-                                <ResponsiveContainer width="100%" height="100%">
-                                  <PieChart>
-                                    <Pie
-                                      data={
-                                        Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                          acc[curr.partnerName] = (acc[curr.partnerName] || 0) + curr.totalAmount;
-                                          return acc;
-                                        }, {}))
-                                        .map(([name, value]) => ({ name, value: value as number }))
-                                        .sort((a, b) => b.value - a.value)
-                                        .slice(0, 5)
-                                      }
-                                      cx="50%"
-                                      cy="45%"
-                                      innerRadius={window.innerWidth < 640 ? 40 : 70}
-                                      outerRadius={window.innerWidth < 640 ? 70 : 110}
-                                      paddingAngle={4}
-                                      dataKey="value"
-                                      stroke="none"
-                                    >
-                                      {['#0f172a', '#2563eb', '#10b981', '#f59e0b', '#ec4899'].map((color, index) => (
-                                        <Cell key={`cell-${index}`} fill={color} />
-                                      ))}
-                                    </Pie>
-                                    <Tooltip 
-                                      formatter={(value: any) => formatNumber(value as number) + ' đ'}
-                                      contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', fontSize: '10px' }}
-                                    />
-                                    <Legend iconType="circle" verticalAlign="bottom" height={40} wrapperStyle={{ fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', paddingTop: '10px' }} />
-                                  </PieChart>
-                                </ResponsiveContainer>
-                              </div>
-                            </Card>
-                          </div>
-
-                          {/* Sổ chi tiết - Chế độ ẩn khi lọc "Tất cả" */}
+                        {/* Sổ chi tiết - Chế độ ẩn khi lọc "Tất cả" */}
                           {timeFilter !== 'all' && (
                             <div className="space-y-4 pt-12 border-t border-slate-100">
                               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
@@ -3825,7 +3964,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                       className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
                                     >
                                       <CheckCircle className="w-3.5 h-3.5" />
-                                      Xác nhận nhận hàng
+                                      Xác nhận đã giao
                                     </button>
                                   </div>
                                 </td>
@@ -3853,7 +3992,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                         >
                           <div className="flex items-center justify-between mb-8">
                             <div>
-                              <h3 className="text-xl font-black text-slate-900 uppercase">XÁC NHẬN HOÀN THÀNH ĐƠN HÀNG</h3>
+                              <h3 className="text-xl font-black text-slate-900 uppercase">XÁC NHẬN ĐÃ GIAO & HOÀN TẤT ĐƠN</h3>
                               <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Đơn hàng: {selectedInTransit.id}</p>
                             </div>
                             <button onClick={() => {
@@ -4206,85 +4345,87 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                         </div>
                       )}
 
-                      <div className="md:col-span-2 space-y-4">
-                        <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng (Ảnh chụp chứng từ cho cả đơn)</label>
-                        <div className="flex flex-col gap-4">
-                          {!newTransaction.evidencePhotoUrl ? (
-                            <div className="flex gap-4">
-                              <button 
-                                type="button"
-                                onClick={() => document.getElementById('photo-upload-multi')?.click()}
-                                className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-primary hover:text-primary hover:bg-primary/5 transition-all group"
-                              >
-                                <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
-                                  <ImageIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                                </div>
-                                <span className="text-[10px] font-black uppercase tracking-widest">Tải ảnh lên</span>
-                              </button>
-                              <button 
-                                type="button"
-                                onClick={() => document.getElementById('camera-capture-multi')?.click()}
-                                className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-emerald-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all group"
-                              >
-                                <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
-                                  <Camera className="w-6 h-6 group-hover:scale-110 transition-transform" />
-                                </div>
-                                <span className="text-[10px] font-black uppercase tracking-widest">Chụp bằng máy ảnh</span>
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="relative group rounded-3xl overflow-hidden border-4 border-white shadow-2xl">
-                              <img src={newTransaction.evidencePhotoUrl} alt="Preview" className="w-full h-64 object-cover" />
-                              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-6 flex items-center justify-between">
-                                <span className="text-white text-[10px] font-black uppercase tracking-widest">Biên bản / Chứng từ gốc</span>
+                      {(activeTab === 'import' || !newTransaction.isInTransit) && (
+                        <div className="md:col-span-2 space-y-4">
+                          <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng (Ảnh chụp chứng từ cho cả đơn)</label>
+                          <div className="flex flex-col gap-4">
+                            {!newTransaction.evidencePhotoUrl ? (
+                              <div className="flex gap-4">
                                 <button 
-                                  onClick={() => setNewTransaction({ ...newTransaction, evidencePhotoUrl: '' })}
-                                  className="w-10 h-10 bg-rose-500 text-white rounded-xl flex items-center justify-center hover:bg-rose-600 transition-all shadow-lg"
+                                  type="button"
+                                  onClick={() => document.getElementById('photo-upload-multi')?.click()}
+                                  className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-primary hover:text-primary hover:bg-primary/5 transition-all group"
                                 >
-                                  <X className="w-5 h-5" />
+                                  <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
+                                    <ImageIcon className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                  </div>
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Tải ảnh lên</span>
+                                </button>
+                                <button 
+                                  type="button"
+                                  onClick={() => document.getElementById('camera-capture-multi')?.click()}
+                                  className="flex-1 h-32 border-2 border-dashed border-slate-200 rounded-3xl flex flex-col items-center justify-center gap-3 text-slate-400 hover:border-emerald-400 hover:text-emerald-500 hover:bg-emerald-50 transition-all group"
+                                >
+                                  <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center group-hover:bg-white transition-colors">
+                                    <Camera className="w-6 h-6 group-hover:scale-110 transition-transform" />
+                                  </div>
+                                  <span className="text-[10px] font-black uppercase tracking-widest">Chụp bằng máy ảnh</span>
                                 </button>
                               </div>
-                            </div>
-                          )}
-                          
-                          <input id="photo-upload-multi" type="file" accept="image/*" className="hidden" 
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                const reader = new FileReader();
-                                reader.onloadend = async () => {
-                                  try {
-                                    const compressed = await compressImage(reader.result as string);
-                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
-                                  } catch (err) {
-                                    console.error("Compression failed", err);
-                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
-                                  }
-                                };
-                                reader.readAsDataURL(file);
-                              }
-                            }}
-                          />
-                          <input id="camera-capture-multi" type="file" accept="image/*" capture="environment" className="hidden" 
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                const reader = new FileReader();
-                                reader.onloadend = async () => {
-                                  try {
-                                    const compressed = await compressImage(reader.result as string);
-                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
-                                  } catch (err) {
-                                    console.error("Compression failed", err);
-                                    setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
-                                  }
-                                };
-                                reader.readAsDataURL(file);
-                              }
-                            }}
-                          />
+                            ) : (
+                              <div className="relative group rounded-3xl overflow-hidden border-4 border-white shadow-2xl">
+                                <img src={newTransaction.evidencePhotoUrl} alt="Preview" className="w-full h-64 object-cover" />
+                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-6 flex items-center justify-between">
+                                  <span className="text-white text-[10px] font-black uppercase tracking-widest">Biên bản / Chứng từ gốc</span>
+                                  <button 
+                                    onClick={() => setNewTransaction({ ...newTransaction, evidencePhotoUrl: '' })}
+                                    className="w-10 h-10 bg-rose-500 text-white rounded-xl flex items-center justify-center hover:bg-rose-600 transition-all shadow-lg"
+                                  >
+                                    <X className="w-5 h-5" />
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            
+                            <input id="photo-upload-multi" type="file" accept="image/*" className="hidden" 
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = async () => {
+                                    try {
+                                      const compressed = await compressImage(reader.result as string);
+                                      setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
+                                    } catch (err) {
+                                      console.error("Compression failed", err);
+                                      setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                            <input id="camera-capture-multi" type="file" accept="image/*" capture="environment" className="hidden" 
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onloadend = async () => {
+                                    try {
+                                      const compressed = await compressImage(reader.result as string);
+                                      setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: compressed }));
+                                    } catch (err) {
+                                      console.error("Compression failed", err);
+                                      setNewTransaction(prev => ({ ...prev, evidencePhotoUrl: reader.result as string }));
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                            />
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                     
                     <div className="mt-12 flex flex-col sm:flex-row gap-4 items-center border-t border-slate-100 pt-10">
