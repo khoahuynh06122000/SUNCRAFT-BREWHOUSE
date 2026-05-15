@@ -581,7 +581,7 @@ export default function App() {
       });
 
       if (count === 0) {
-        alert("Hệ thống hiện tại đã ở trạng thái sạch (không có dữ liệu tùy chỉnh trên database).");
+        showNotification("Hệ thống hiện tại đã ở trạng thái sạch.");
         setLoading(false);
         return;
       }
@@ -659,7 +659,7 @@ export default function App() {
       );
 
       if (targets.length === 0) {
-        alert(`Không có dữ liệu ${typeLabel} để xuất.`);
+        showNotification(`Không có dữ liệu ${typeLabel} để xuất.`, 'error');
         return;
       }
 
@@ -878,7 +878,7 @@ export default function App() {
 
   const handleExportRevenueToExcel = () => {
     if (revenueData.length === 0) {
-      alert('Không có dữ liệu doanh thu để xuất.');
+      showNotification('Không có dữ liệu doanh thu để xuất.', 'error');
       return;
     }
 
@@ -4146,7 +4146,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                             <button 
                               onClick={() => {
                                 const missingProducts = products.filter(p => !newTransaction.items.some(item => item.productId === p.id));
-                                if (!missingProducts.length) return alert("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
+                                if (!missingProducts.length) return showNotification("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
                                 
                                 setNewTransaction(prev => ({
                                   ...prev,
@@ -4167,7 +4167,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                   !newTransaction.items.some(item => item.productId === p.id)
                                 );
                                 if (availableProducts.length === 0) {
-                                  alert("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
+                                  showNotification("Anh đã chọn hết các mặt hàng hiện có rồi ạ!");
                                   return;
                                 }
                                 
