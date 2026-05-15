@@ -458,8 +458,15 @@ export default function App() {
     // Sync Revenue
     const qRevenue = query(collection(db, 'revenue'));
     const unsubRevenue = onSnapshot(qRevenue, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as RevenueRecord));
-      setRevenueData(data);
+      const data = snapshot.docs.map(doc => {
+        const d = doc.data();
+        return { 
+          ...d, 
+          id: doc.id,
+          _parsedDate: parseDateSafe(d.date) // Pre-parse for performance
+        } as Transaction & { _parsedDate: Date };
+      });
+      setRevenueData(data as any);
     }, (error) => {
       handleFirestoreError(error, OperationType.GET, 'revenue');
     });
@@ -1334,7 +1341,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
     return revenueData.filter(r => {
       try {
-        const date = parseDateSafe(r.date);
+        const date = (r as any)._parsedDate || parseDateSafe(r.date);
         return isWithinInterval(date, { start, end });
       } catch {
         return false;
@@ -1364,7 +1371,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
     return revenueData.filter(r => {
       try {
-        const date = parseDateSafe(r.date);
+        const date = (r as any)._parsedDate || parseDateSafe(r.date);
         return isWithinInterval(date, { start, end });
       } catch {
         return false;
@@ -1372,33 +1379,43 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
   }, [revenueData, timeFilter, filterBaseDate]);
 
-  const cfoMetrics = useMemo(() => {
+  const revenueAnalytics = useMemo(() => {
     const currentRev = filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0);
     const prevRev = previousRevenueByTime.reduce((a, b) => a + b.totalAmount, 0);
-    const growth = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : 0;
-
     const currentQty = filteredRevenueByTime.reduce((a, b) => a + b.quantity, 0);
     const prevQty = previousRevenueByTime.reduce((a, b) => a + b.quantity, 0);
-    const qtyGrowth = prevQty > 0 ? ((currentQty - prevQty) / prevQty) * 100 : 0;
 
-    // ARPU (Avg Revenue Per Unit)
-    const arpu = currentQty > 0 ? (currentRev / currentQty) : 0;
-    const prevArpu = prevQty > 0 ? (prevRev / prevQty) : 0;
-    const arpuGrowth = prevArpu > 0 ? ((arpu - prevArpu) / prevArpu) * 100 : 0;
+    const partnerGroups: Record<string, number> = {};
+    const productGroups: Record<string, number> = {};
+    const productQtyGroups: Record<string, number> = {};
 
-    // Customer Concentration (Pareto)
-    const partnerGroups = filteredRevenueByTime.reduce((acc: any, curr) => {
-      acc[curr.partnerName] = (acc[curr.partnerName] || 0) + curr.totalAmount;
-      return acc;
-    }, {});
+    filteredRevenueByTime.forEach(r => {
+      partnerGroups[r.partnerName] = (partnerGroups[r.partnerName] || 0) + r.totalAmount;
+      productGroups[r.productName] = (productGroups[r.productName] || 0) + r.totalAmount;
+      productQtyGroups[r.productName] = (productQtyGroups[r.productName] || 0) + r.quantity;
+    });
+
     const sortedPartners = Object.entries(partnerGroups)
-      .map(([name, value]) => ({ name, value: value as number }))
+      .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
     
-    let cumulative = 0;
+    const sortedProducts = Object.entries(productGroups)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    const sortedProductQty = Object.entries(productQtyGroups)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
     const top20Count = Math.ceil(sortedPartners.length * 0.2);
     const top20Rev = sortedPartners.slice(0, top20Count).reduce((a, b) => a + b.value, 0);
     const concentration = currentRev > 0 ? (top20Rev / currentRev) * 100 : 0;
+
+    const growth = prevRev > 0 ? ((currentRev - prevRev) / prevRev) * 100 : 0;
+    const qtyGrowth = prevQty > 0 ? ((currentQty - prevQty) / prevQty) * 100 : 0;
+    const arpu = currentQty > 0 ? (currentRev / currentQty) : 0;
+    const prevArpu = prevQty > 0 ? (prevRev / prevQty) : 0;
+    const arpuGrowth = prevArpu > 0 ? ((arpu - prevArpu) / prevArpu) * 100 : 0;
 
     return {
       totalRevenue: currentRev,
@@ -1408,9 +1425,13 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       arpu,
       arpuGrowth,
       concentration,
-      partnerStats: sortedPartners
+      partnerStats: sortedPartners,
+      productStats: sortedProducts,
+      productQtyStats: sortedProductQty
     };
   }, [filteredRevenueByTime, previousRevenueByTime]);
+
+  const cfoMetrics = revenueAnalytics;
 
   const groupedRevenue = useMemo(() => {
     const groups = new Map<string, {
@@ -1445,7 +1466,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
 
     return Array.from(groups.values()).sort((a, b) => {
-      return parseDateSafe(b.date).getTime() - parseDateSafe(a.date).getTime();
+      return b.date.localeCompare(a.date);
     });
   }, [filteredRevenueByTime, revenuePartnerSearch]);
 
@@ -1691,20 +1712,20 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
 
     // 1. Calculate In/Out for the period
+    const productPriceMap = new Map(products.map(p => [p.id, p.price]));
+    
     filteredTransactionsForReport.forEach(t => {
-      // Don't count in-transit exports in the "OUT" reports until they are completed
       if (t.type === 'OUT' && t.status === 'in_transit') return;
 
       const entry = summaryMap.get(t.productId);
-      const product = products.find(p => p.id === t.productId);
-      if (entry && product) {
+      if (entry) {
+        const price = productPriceMap.get(t.productId) || 0;
         if (t.type === 'IN' || t.type === 'OPENING') {
           entry.in += t.quantity;
-          entry.inValue += t.quantity * product.price;
+          entry.inValue += t.quantity * price;
         } else {
-          // General OUT categories (OUT, LOSS, DAMAGE)
           entry.out += t.quantity;
-          entry.outValue += t.quantity * product.price;
+          entry.outValue += t.quantity * price;
         }
       }
     });
@@ -1855,12 +1876,21 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   // Derived State: Stats & Turnover
   const stats = useMemo(() => {
-    const totalIn = filteredTransactionsByTime.filter(t => t.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0);
-    const totalOut = filteredTransactionsByTime.filter(t => 
-      (t.type === 'OUT' && (t.status === 'completed' || !t.status)) || 
-      t.type === 'LOSS' || 
-      t.type === 'DAMAGE'
-    ).reduce((acc, curr) => acc + curr.quantity, 0);
+    let totalIn = 0;
+    let totalOut = 0;
+
+    filteredTransactionsByTime.forEach(t => {
+      if (t.type === 'IN') {
+        totalIn += t.quantity;
+      } else if (
+        (t.type === 'OUT' && (t.status === 'completed' || !t.status)) || 
+        t.type === 'LOSS' || 
+        t.type === 'DAMAGE'
+      ) {
+        totalOut += t.quantity;
+      }
+    });
+
     const currentStock = inventory.reduce((acc, curr) => acc + curr.stock, 0);
     const partnerCount = partners.length;
     const totalLiters = inventory.reduce((acc, curr) => acc + curr.totalLiters, 0);
@@ -1874,9 +1904,15 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     }, 0);
 
     const lowStockThreshold = 10;
-    const lowStockItems = inventory.filter(i => i.stock > 0 && i.stock < lowStockThreshold).length;
-    const outOfStockItems = inventory.filter(i => i.stock <= 0).length;
-    const healthyItems = inventory.filter(i => i.stock >= lowStockThreshold).length;
+    let lowStockItems = 0;
+    let outOfStockItems = 0;
+    let healthyItems = 0;
+
+    inventory.forEach(i => {
+      if (i.stock <= 0) outOfStockItems++;
+      else if (i.stock < lowStockThreshold) lowStockItems++;
+      else healthyItems++;
+    });
 
     return { 
       totalIn, 
@@ -1912,15 +1948,28 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   const chartData = useMemo(() => {
     const categories: Category[] = ['Lon', 'Lít', 'Chai'];
-    return categories.map(cat => ({
-      name: cat,
-      Nhập: filteredTransactionsByTime.filter(t => t.category === cat && t.type === 'IN').reduce((acc, curr) => acc + curr.quantity, 0),
-      Xuất: filteredTransactionsByTime.filter(t => t.category === cat && t.type === 'OUT').reduce((acc, curr) => acc + curr.quantity, 0),
-      'Doanh thu': filteredRevenueByTime.filter(r => {
-        const p = products.find(prod => prod.name === r.productName);
-        return p?.category === cat;
-      }).reduce((acc, curr) => acc + curr.quantity, 0),
-    }));
+    const results = categories.reduce((acc, cat) => {
+      acc[cat] = { name: cat, Nhập: 0, Xuất: 0, 'Doanh thu': 0 };
+      return acc;
+    }, {} as Record<string, any>);
+
+    const prodToCat = new Map(products.map(p => [p.name, p.category]));
+
+    filteredTransactionsByTime.forEach(t => {
+      if (results[t.category]) {
+        if (t.type === 'IN') results[t.category].Nhập += t.quantity;
+        else if (t.type === 'OUT') results[t.category].Xuất += t.quantity;
+      }
+    });
+
+    filteredRevenueByTime.forEach(r => {
+      const cat = prodToCat.get(r.productName);
+      if (cat && results[cat]) {
+        results[cat]['Doanh thu'] += r.quantity;
+      }
+    });
+
+    return Object.values(results);
   }, [filteredTransactionsByTime, filteredRevenueByTime, products]);
 
   const handleAddTransaction = async (type: TransactionType) => {
@@ -3203,7 +3252,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                 <div className="relative z-10 flex flex-col md:flex-row gap-8 items-center">
                                   <div className="space-y-2 text-center md:text-left">
                                     <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-500">Tổng doanh thu kỳ này</p>
-                                    <h3 className="text-2xl sm:text-4xl font-black text-white">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0))} <span className="text-[10px] sm:text-sm font-bold opacity-40">VNĐ</span></h3>
+                                    <h3 className="text-2xl sm:text-4xl font-black text-white">{formatNumber(cfoMetrics.totalRevenue)} <span className="text-[10px] sm:text-sm font-bold opacity-40">VNĐ</span></h3>
                                     <p className="text-xs font-bold text-emerald-400 flex items-center gap-1 justify-center md:justify-start">
                                       <TrendingUp className="w-3 h-3" /> Tăng trưởng ổn định dựa trên báo cáo
                                     </p>
@@ -3212,13 +3261,10 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                   <div className="flex-1 w-full">
                                     <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500 mb-4">Top Đối tác mua nhiều nhất</p>
                                     <div className="space-y-3">
-                                      {Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                        acc[curr.partnerName] = (acc[curr.partnerName] || 0) + curr.totalAmount;
-                                        return acc;
-                                      }, {})).sort((a: any, b: any) => b[1] - a[1]).slice(0, 2).map(([name, val]) => (
-                                        <div key={name} className="flex items-center justify-between">
-                                          <span className="text-xs font-bold text-white/70 uppercase tracking-tight">{name}</span>
-                                          <span className="text-xs font-black text-white">{formatNumber(val as number)}đ</span>
+                                      {cfoMetrics.partnerStats.slice(0, 2).map((p) => (
+                                        <div key={p.name} className="flex items-center justify-between">
+                                          <span className="text-xs font-bold text-white/70 uppercase tracking-tight">{p.name}</span>
+                                          <span className="text-xs font-black text-white">{formatNumber(p.value)}đ</span>
                                         </div>
                                       ))}
                                     </div>
@@ -3231,10 +3277,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                 <Package className="w-8 h-8" />
                               </div>
                               <h4 className="font-black text-slate-900 uppercase">
-                                {Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                  acc[curr.productName] = (acc[curr.productName] || 0) + curr.quantity;
-                                  return acc;
-                                }, {})).sort((a: any, b: any) => b[1] - a[1])[0][0]}
+                                {cfoMetrics.productQtyStats[0]?.name || '—'}
                               </h4>
                               <p className="text-xs font-bold text-slate-400 mt-1 uppercase tracking-widest">Dẫn đầu sản lượng</p>
                            </Card>
@@ -3601,15 +3644,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                       <ResponsiveContainer width="100%" height="100%">
                                         <BarChart 
                                           layout="vertical"
-                                          data={
-                                            Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                              acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
-                                              return acc;
-                                            }, {}))
-                                            .map(([name, value]) => ({ name, value: value as number }))
-                                            .sort((a, b) => b.value - a.value)
-                                            .slice(0, 5)
-                                          }
+                                          data={cfoMetrics.productStats.slice(0, 5)}
                                           margin={{ left: 0, right: 30 }}
                                         >
                                           <XAxis type="number" hide />
@@ -3662,14 +3697,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
                               <Card title="Xếp hạng SKU dẫn đầu">
                                 <div className="space-y-5 mt-4">
-                                  {Object.entries(filteredRevenueByTime.reduce((acc: any, curr) => {
-                                      acc[curr.productName] = (acc[curr.productName] || 0) + curr.totalAmount;
-                                      return acc;
-                                    }, {}))
-                                    .map(([name, value]) => ({ name, value: value as number }))
-                                    .sort((a, b) => b.value - a.value)
-                                    .slice(0, 8)
-                                    .map((p, i) => (
+                                  {cfoMetrics.productStats.slice(0, 8).map((p, i) => (
                                       <div key={p.name} className="flex items-center justify-between group py-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 px-3 rounded-2xl transition-all">
                                         <div className="flex items-center gap-4">
                                           <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center text-[12px] font-black text-slate-400 group-hover:bg-slate-900 group-hover:text-white transition-all shrink-0">
