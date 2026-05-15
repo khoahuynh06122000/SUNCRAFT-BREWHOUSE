@@ -1,17 +1,17 @@
 import { Product, Partner, Transaction } from './types';
 
 export const INITIAL_PRODUCTS: Product[] = [
-  { id: 'p1', name: 'Bia Golden Bridge Helles Lager (LÍT)', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p2', name: 'Bia Wings Dark Lager (LÍT)', category: 'Lít', unit: 'Lít', price: 48000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p4', name: 'Bia Golden Bridge Helles Lager (LON)', category: 'Lon', unit: 'Lon', price: 15833, conversionFactor: 1, capacityPerUnit: 330 },
-  { id: 'p5', name: 'Bia Wings Dark Lager (LON)', category: 'Lon', unit: 'Lon', price: 17083, conversionFactor: 1, capacityPerUnit: 330 },
-  { id: 'p10', name: 'Bia Volcano Kiss dry hop lager (LÍT)', category: 'Lít', unit: 'Lít', price: 58000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p11', name: 'Bia Helios Wheat Lager (LÍT)', category: 'Lít', unit: 'Lít', price: 53000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p12', name: 'Bia Eclipse Plaza Dry Hop Wheat (LÍT)', category: 'Lít', unit: 'Lít', price: 54000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p14', name: 'Bia Golden Zest (LÍT)', category: 'Lít', unit: 'Lít', price: 47000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p15', name: 'Bia Lunar Castle Dry hop Pale Ale (LÍT)', category: 'Lít', unit: 'Lít', price: 55000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p16', name: 'Bia Rosa Garden Light Lager (LÍT)', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p17', name: 'Bia Lunar Castle Dry hop Pale Ale (LON)', category: 'Lon', unit: 'Lon', price: 17500, conversionFactor: 1, capacityPerUnit: 330 },
+  { id: 'p1', name: 'Bia Golden Bridge Helles Lager', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p2', name: 'Bia Wings Dark Lager', category: 'Lít', unit: 'Lít', price: 48000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p4', name: 'Bia Golden Bridge Helles Lager lon330ml', category: 'Lon', unit: 'Lon', price: 15833, conversionFactor: 1, capacityPerUnit: 330 },
+  { id: 'p5', name: 'Bia Wings Dark Lager 330ml', category: 'Lon', unit: 'Lon', price: 17083, conversionFactor: 1, capacityPerUnit: 330 },
+  { id: 'p10', name: 'Bia Volcano Kiss dry hop lager', category: 'Lít', unit: 'Lít', price: 58000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p11', name: 'Bia Helios Wheat Lager', category: 'Lít', unit: 'Lít', price: 53000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p12', name: 'Bia Eclipse Plaza Dry Hop Wheat', category: 'Lít', unit: 'Lít', price: 54000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p14', name: 'Bia Golden Zest', category: 'Lít', unit: 'Lít', price: 47000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p15', name: 'Bia Lunar Castle Dry hop Pale Ale', category: 'Lít', unit: 'Lít', price: 55000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p16', name: 'Bia Rosa Garden Light Lager', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p17', name: 'Bia Lunar Castle Dry hop Pale Ale 330ml', category: 'Lon', unit: 'Lon', price: 17500, conversionFactor: 1, capacityPerUnit: 330 },
 ];
 
 export const INITIAL_PARTNERS: Partner[] = [

@@ -1249,7 +1249,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
           notes: `[HAO HỤT TỪ ĐƠN ${selectedInTransit.id}] Lý do: ${lossReason}`,
           status: 'completed',
           date: new Date().toISOString(),
-          evidencePhotoUrl: lossEvidencePhoto || undefined
+          evidencePhotoUrl: lossEvidencePhoto || null
         };
         await setDoc(doc(db, 'transactions', lossId), lossTrx);
 
@@ -2052,7 +2052,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 ? `[Món ${validItems.indexOf(item) + 1}/${validItems.length}] ${allocations.length > 1 ? `[Lô ${i+1}/${allocations.length}] ` : ''}${newTransaction.notes}`
                 : (allocations.length > 1 ? `[Lô ${i+1}/${allocations.length}] ${newTransaction.notes}` : newTransaction.notes),
               batchNumber: alloc.batchNumber,
-              evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
+              evidencePhotoUrl: newTransaction.evidencePhotoUrl || null,
               createdBy: userEmail || user || 'Guest',
               referenceGroupId: referenceGroupId,
               status: newTransaction.isInTransit ? 'in_transit' : 'completed',
@@ -2073,8 +2073,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
             partnerId: type === 'OPENING' ? 'SYSTEM_BEGINNING' : (par?.id || 'UNKNOWN'),
             partnerName: type === 'OPENING' ? 'Số dư đầu kỳ' : (par?.name || 'Vô danh'),
             notes: validItems.length > 1 ? `[Món ${validItems.indexOf(item) + 1}/${validItems.length}] ${newTransaction.notes}` : newTransaction.notes,
-            batchNumber: item.batchNumber || undefined,
-            evidencePhotoUrl: newTransaction.evidencePhotoUrl || undefined,
+            batchNumber: item.batchNumber || null,
+            evidencePhotoUrl: newTransaction.evidencePhotoUrl || null,
             createdBy: userEmail || user || 'Guest',
             referenceGroupId: referenceGroupId
           };
@@ -4324,7 +4324,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                   <div className="sm:col-span-5">
                                     <Select 
                                       label={`Sản phẩm ${index + 1}`}
-                                      options={products.map(p => ({ value: p.id, label: `${p.name} — [${p.category.toUpperCase()}] (${p.unit})` }))}
+                                      options={products.map(p => ({ value: p.id, label: p.name }))}
                                       value={item.productId}
                                       onChange={(e: any) => updateTransactionItem(index, { productId: e.target.value })}
                                     />
@@ -4350,21 +4350,22 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                     {activeTab === 'export' && (() => {
                                       const selectedBatch = batches.find(b => b.productId === item.productId && b.batchNumber === item.batchNumber);
                                       const currentProduct = products.find(p => p.id === item.productId);
-                                      const isMismatch = selectedBatch && currentProduct && selectedBatch.category !== currentProduct.category;
+                                      // Only show mismatch if we actually matched a batch for this specific productId
+                                      const isCategoryMismatch = selectedBatch && currentProduct && selectedBatch.category !== currentProduct.category;
                                       
                                       return (
                                         <div className={cn(
                                           "text-[10px] font-mono font-black px-3 py-3 rounded-xl border flex flex-col gap-1",
-                                          isMismatch ? "text-amber-600 bg-amber-50 border-amber-200" : "text-rose-500 bg-rose-50/50 border-rose-100"
+                                          isCategoryMismatch ? "text-rose-600 bg-rose-50 border-rose-200" : "text-rose-500 bg-rose-50/50 border-rose-100"
                                         )}>
                                           <div className="flex items-center justify-between">
                                             <span>FIFO: {item.batchNumber || 'TỰ ĐỘNG'}</span>
                                             {selectedBatch && <span className="opacity-40">{selectedBatch.category}</span>}
                                           </div>
-                                          {isMismatch && (
-                                            <div className="text-[8px] flex items-center gap-1.5 mt-0.5 text-amber-500 uppercase">
+                                          {isCategoryMismatch && (
+                                            <div className="text-[8px] flex items-center gap-1.5 mt-0.5 text-rose-500 uppercase font-black">
                                               <AlertTriangle className="w-3 h-3" />
-                                              Mã lô khác hệ sản phẩm ({selectedBatch.category} vs {currentProduct.category})
+                                              Cảnh báo: Lô này thuộc hệ {selectedBatch.category}
                                             </div>
                                           )}
                                         </div>
