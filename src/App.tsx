@@ -760,23 +760,25 @@ export default function App() {
           if (inv && inv !== '') incomingInvoices.add(inv);
         });
 
-        // Step 2: Find all existing records in the DB that share these Invoice Numbers
-        const deletePromises: Promise<any>[] = [];
-        let cleanedRecordCount = 0;
-        
+        // Step 2: Identify existing invoice numbers in DB to prevent duplicates
+        const dbInvoices = new Set<string>();
         revenueData.forEach(r => {
-          if (r.invoiceNumber && incomingInvoices.has(r.invoiceNumber.trim())) {
-            deletePromises.push(deleteDoc(doc(db, 'revenue', r.id)));
-            cleanedRecordCount++;
-          }
+          if (r.invoiceNumber) dbInvoices.add(r.invoiceNumber.trim());
         });
 
         const newRecordsPromises: Promise<any>[] = [];
         let newAddedCount = 0;
-
-        let runningBatches = batches.map(b => ({ ...b }));
+        let skippedCount = 0;
 
         data.forEach((row, idx) => {
+          const invNumber = String(row['Số hóa đơn'] || row['Số HĐ'] || row['Invoice No'] || row['Số chứng từ'] || row['Số CT'] || '').trim();
+          
+          // If this invoice already exists in the database, skip it entirely
+          if (invNumber && dbInvoices.has(invNumber)) {
+            skippedCount++;
+            return;
+          }
+
           const dateVal = row['Ngày xuất hoá đơn'] || row['Ngày hóa đơn (ngày nhận)'] || row['Ngày giao bia'] || row['Ngày'] || row['Date'] || row['Ngày chứng từ'];
           const excelPartnerName = String(
             row['Đơn vị thụ hưởng'] || 
@@ -808,7 +810,7 @@ export default function App() {
             unitPrice: Number(row['SKB - TLD'] || row['ĐG TLD'] || row['Đơn giá'] || row['Price'] || row['Unit Price'] || row['ĐG'] || 0),
             totalAmount: Number(row['Thành tiền sau thuế'] || row['Thành tiền'] || row['Total'] || row['Revenue Amount'] || row['Tổng tiền'] || 0),
             vatAmount: Number(row['VAT'] || row['Thuế GTGT'] || 0),
-            invoiceNumber: String(row['Số hóa đơn'] || row['Số HĐ'] || row['Invoice No'] || row['Số chứng từ'] || row['Số CT'] || '').trim(),
+            invoiceNumber: invNumber,
             deptCode: String(row['Mã BP'] || row['Bộ phận'] || row['Mã phòng ban'] || ''),
             partnerName: officialPartner ? officialPartner.name : excelPartnerName,
             partnerId: officialPartner?.id
@@ -818,50 +820,24 @@ export default function App() {
           record.id = deterministicId;
           newRecordsPromises.push(setDoc(doc(db, 'revenue', deterministicId), record));
 
-          // Also create 'OUT' transactions with FIFO
-          const product = products.find(p => p.name.toLowerCase().trim() === record.productName.toLowerCase().trim());
-          if (product && qty > 0) {
-            const allocations = getFIFOAllocations(product.id, qty, runningBatches);
-            const referenceGroupId = `group-rev-${record.invoiceNumber || deterministicId}`;
-            for (let i = 0; i < allocations.length; i++) {
-              const alloc = allocations[i];
-              const exportId = `trx-rev-${deterministicId}-${i}`;
-              newRecordsPromises.push(setDoc(doc(db, 'transactions', exportId), {
-                id: exportId,
-                date: record.date,
-                type: 'OUT',
-                productId: product.id,
-                productName: product.name,
-                category: product.category,
-                quantity: alloc.quantity,
-                partnerId: officialPartner?.id || 'REVENUE_EXCEL',
-                partnerName: officialPartner?.name || record.partnerName,
-                notes: allocations.length > 1 
-                  ? `[HĐ ${record.invoiceNumber}] Lô ${i+1}/${allocations.length}`
-                  : `Tự động từ HĐ: ${record.invoiceNumber}`,
-                batchNumber: alloc.batchNumber,
-                createdBy: 'REVENUE_SYNC',
-                referenceGroupId: referenceGroupId
-              }));
-            }
-          }
-
           newAddedCount++;
         });
 
-        if (newRecordsPromises.length === 0 && deletePromises.length === 0) {
-          alert('File không có dữ liệu hợp lệ để xử lý.');
+        if (newRecordsPromises.length === 0) {
+          if (skippedCount > 0) {
+            showNotification(`Tất cả ${skippedCount} dòng đã tồn tại trên hệ thống. Không có dữ liệu mới được nạp.`, 'error');
+          } else {
+            showNotification('File không có dữ liệu hợp lệ để xử lý.', 'error');
+          }
+          setLoading(false);
           return;
         }
 
         setLoading(true);
-        // Execute deletions first, then additions
-        Promise.all(deletePromises).then(() => {
-          return Promise.all(newRecordsPromises);
-        }).then(() => {
+        Promise.all(newRecordsPromises).then(() => {
           setActiveTab('revenue-mgmt');
           setLoading(false);
-          showNotification('Hệ thống cập nhật data thành công');
+          showNotification(`Đã nạp mới ${newAddedCount} dòng dữ liệu. Bỏ qua ${skippedCount} dòng do trùng Số hóa đơn.`);
           if (revenueInputRef.current) revenueInputRef.current.value = '';
         }).catch(err => {
           console.error(err);
@@ -3465,138 +3441,30 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                           <div className="space-y-6 mb-8">
                             {/* Summary Metrics */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-primary">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Hiệu suất Khớp</p>
-                                <p className="text-xl font-black text-primary">{Math.round(totalReconciliationScore)}%</p>
-                                <div className="w-full h-1 bg-slate-50 rounded-full mt-2 overflow-hidden">
-                                  <div className="h-full bg-primary" style={{ width: `${totalReconciliationScore}%` }} />
-                                </div>
-                              </div>
                               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-slate-900">
                                 <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Tổng DT Gộp</p>
                                 <p className="text-xl font-black text-slate-900">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0))}</p>
                                 <p className="text-[8px] font-bold text-emerald-500 mt-1">Ghi nhận từ HĐ</p>
                               </div>
                               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-emerald-500">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Lợi nhuận (Est.)</p>
-                                <p className="text-xl font-black text-emerald-600">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.totalAmount * 0.15, 0))}</p>
-                                <p className="text-[8px] font-bold text-slate-300 mt-1">Marg. 15% Standard</p>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Sản lượng (ĐV)</p>
+                                <p className="text-xl font-black text-emerald-600">{formatNumber(filteredRevenueByTime.reduce((a, b) => a + b.quantity, 0))}</p>
+                                <p className="text-[8px] font-bold text-slate-300 mt-1">Tổng số đơn vị bán ra</p>
                               </div>
                               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-indigo-500">
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Quy mô Đơn</p>
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Số lượng HĐ</p>
                                 <p className="text-xl font-black text-slate-900">{groupedRevenue.length}</p>
-                                <p className="text-[8px] font-bold text-slate-300 mt-1">Hóa đơn trong kỳ</p>
+                                <p className="text-[8px] font-bold text-slate-300 mt-1">Giao dịch trong kỳ</p>
+                              </div>
+                              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm border-l-4 border-l-amber-500">
+                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Giá trị trung bình</p>
+                                <p className="text-xl font-black text-amber-600">{formatNumber(groupedRevenue.length > 0 ? (filteredRevenueByTime.reduce((a, b) => a + b.totalAmount, 0) / groupedRevenue.length) : 0)}</p>
+                                <p className="text-[8px] font-bold text-slate-300 mt-1">Bình quân / Hóa đơn</p>
                               </div>
                             </div>
                           </div>
 
-                          {/* Manager/Analyst Executive Summary */}
-                          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                            <div className="lg:col-span-3">
-                              <Card className="bg-white border border-slate-100 shadow-xl p-0 overflow-hidden rounded-3xl">
-                                <div className="grid grid-cols-1 md:grid-cols-12">
-                                  {/* Sidebar Metric */}
-                                  <div className="md:col-span-4 bg-slate-900 p-6 sm:p-8 text-white flex flex-col justify-between relative overflow-hidden">
-                                    <div className="absolute top-0 right-0 opacity-5 -translate-y-1/4 translate-x-1/4">
-                                      <ShieldCheck className="w-32 sm:w-48 h-32 sm:h-48" />
-                                    </div>
-                                    <div className="relative z-10">
-                                      <p className="text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 mb-1 sm:mb-2 text-center md:text-left">Chỉ số Khớp lệnh</p>
-                                      <h3 className="text-4xl sm:text-5xl font-bold tracking-tighter text-center md:text-left">{Math.round(totalReconciliationScore)}%</h3>
-                                      <div className="mt-3 sm:mt-4">
-                                        <div className="h-1 w-full bg-white/10 rounded-full overflow-hidden">
-                                          <div 
-                                            className="h-full bg-primary"
-                                            style={{ width: `${totalReconciliationScore}%` }}
-                                          />
-                                        </div>
-                                      </div>
-                                      <p className="text-[9px] sm:text-[10px] font-medium text-white/50 mt-3 sm:mt-4 leading-relaxed uppercase tracking-wider text-center md:text-left">
-                                        {totalReconciliationScore === 100 
-                                          ? "Tất cả giao dịch kho đã có HĐ."
-                                          : "Có chênh lệch cần rà soát."}
-                                      </p>
-                                    </div>
-                                    <div className="relative z-10 pt-6 sm:pt-8 mt-6 sm:mt-8 border-t border-white/5">
-                                      <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                          <p className="text-[8px] font-bold text-white/30 uppercase tracking-widest leading-none mb-1 text-center md:text-left">Thực Xuất</p>
-                                          <p className="text-base sm:text-lg font-bold text-center md:text-left">{formatNumber(reconciliationData.reduce((a, b) => a + b.exportQty, 0))}</p>
-                                        </div>
-                                        <div className="text-right">
-                                          <p className="text-[8px] font-bold text-white/30 uppercase tracking-widest leading-none mb-1 text-center md:text-right">Hóa Đơn</p>
-                                          <p className="text-base sm:text-lg font-bold text-primary text-center md:text-right">{formatNumber(reconciliationData.reduce((a, b) => a + b.revenueQty, 0))}</p>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
 
-                                  {/* Details Area */}
-                                  <div className="md:col-span-8 p-8 bg-white">
-                                    <div className="flex items-center justify-between mb-8">
-                                      <h4 className="text-lg font-bold text-slate-800 tracking-tight">Đối soát sản lượng</h4>
-                                      <div className="flex gap-2">
-                                        <div className="px-2.5 py-1 bg-slate-50 text-slate-400 text-[9px] font-bold uppercase rounded-lg border border-slate-100">Dữ liệu FIFO</div>
-                                      </div>
-                                    </div>
-
-                                    <div className="space-y-5 max-h-[300px] overflow-y-auto pr-4 scrollbar-thin scrollbar-thumb-slate-100">
-                                      {reconciliationData.length > 0 ? reconciliationData.map((item) => (
-                                        <div key={item.productId} className="group/item">
-                                          <div className="flex justify-between items-end mb-1.5">
-                                            <div>
-                                              <p className="text-xs font-bold text-slate-700">{item.productName}</p>
-                                              <p className="text-[9px] font-medium text-slate-400 uppercase tracking-tight">{item.category} • {item.unit}</p>
-                                            </div>
-                                            <div className="text-right">
-                                              <span className={cn(
-                                                "text-[11px] font-bold",
-                                                item.diff > 0 ? "text-rose-500" : item.diff < 0 ? "text-blue-500" : "text-emerald-500"
-                                              )}>
-                                                {item.diff === 0 ? 'KHỚP' : (item.diff > 0 ? `+${formatNumber(item.diff)}` : formatNumber(item.diff))}
-                                              </span>
-                                            </div>
-                                          </div>
-                                          <div className="h-1.5 w-full bg-slate-50 rounded-full overflow-hidden flex">
-                                            <div 
-                                              className={cn("h-full", item.diff === 0 ? "bg-emerald-400" : "bg-primary")}
-                                              style={{ width: `${item.matchPercentage}%` }}
-                                            />
-                                          </div>
-                                        </div>
-                                      )) : (
-                                        <div className="h-full flex flex-col items-center justify-center text-slate-200 py-12">
-                                          <PackageSearch className="w-10 h-10 mb-4 opacity-10" />
-                                          <p className="text-xs font-bold uppercase tracking-widest">Không có dữ liệu</p>
-                                        </div>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              </Card>
-                            </div>
-                            
-                            <div className="flex flex-col gap-4">
-                              <Card className="flex-1 bg-slate-900 border-none p-6 text-white flex flex-col justify-between">
-                                <p className="text-[10px] font-black text-white/40 uppercase tracking-[0.2em]">Tổng lượng</p>
-                                <div>
-                                  <h4 className="text-3xl font-black text-emerald-400">-{formatNumber(reconciliationData.reduce((a, b) => a + b.exportQty, 0))}</h4>
-                                  <p className="text-[9px] font-bold text-white/30 uppercase mt-1 tracking-widest">Đang đi đường & Đã giao</p>
-                                </div>
-                              </Card>
-                              <button 
-                                onClick={() => {
-                                  if (window.confirm('Bạn có chắc chắn muốn xóa bản báo cáo doanh thu hiện tại không?')) {
-                                    setRevenueData([]);
-                                  }
-                                }}
-                                className="w-full bg-rose-50 border border-rose-100 rounded-2xl flex flex-col items-center justify-center p-4 group hover:bg-rose-600 transition-all duration-300"
-                              >
-                                <Trash2 className="w-6 h-6 text-rose-500 group-hover:text-white mb-1 transition-colors" />
-                                <p className="text-[9px] font-black uppercase tracking-widest text-rose-600 group-hover:text-white transition-colors">Làm mới Báo cáo</p>
-                              </button>
-                            </div>
-                          </div>
 
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                             <div className="bg-slate-900 rounded-3xl p-6 text-white shadow-xl flex flex-col justify-between">
