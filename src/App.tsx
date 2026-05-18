@@ -411,6 +411,8 @@ export default function App() {
   const [showPasswordInModal, setShowPasswordInModal] = useState(false);
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [newPinInputModal, setNewPinInputModal] = useState('');
+  const [isUpdatingPin, setIsUpdatingPin] = useState(false);
   
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
@@ -524,6 +526,14 @@ export default function App() {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
+  
+  // Security Layer: PIN
+  const [showPinEntry, setShowPinEntry] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pendingUserConfig, setPendingUserConfig] = useState<UserConfig | null>(null);
+  const [isPinRecovery, setIsPinRecovery] = useState(false);
+  const [recoveryCodeInput, setRecoveryCodeInput] = useState('');
+  const [isRequestingRecovery, setIsRequestingRecovery] = useState(false);
 
   const handleLogin = async () => {
     if (isAuthenticating) return;
@@ -538,6 +548,15 @@ export default function App() {
 
     setIsAuthenticating(true);
     try {
+      // Establish Firebase session
+      let currentUser = auth.currentUser;
+      if (!currentUser) {
+        const authResult = await signInAnonymously(auth);
+        currentUser = authResult.user;
+      }
+
+      if (!currentUser) throw new Error("Không thể thiết lập phiên làm việc bảo mật.");
+
       // 1. Initial hardcoded setup for the boss
       if ((uname === 'khoahuynh' || uname === 'admin') && pword === '123456') {
         const adminDoc = await getDocFromServer(doc(db, 'user_configs', uname));
@@ -547,7 +566,9 @@ export default function App() {
             password: pword,
             role: 'OWNER',
             name: uname === 'khoahuynh' ? 'Khoa Huỳnh' : 'Administrator',
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            linkedUid: currentUser.uid,
+            pin: '061220' // Đã cập nhật mã PIN theo yêu cầu: 061220
           });
         }
       }
@@ -565,10 +586,31 @@ export default function App() {
         return;
       }
 
-      // 3. Set local auth state
+      // 2.5 Security Step: Check for PIN requirement for 'khoahuynh'
+      if (uname === 'khoahuynh' || userData.pin) {
+        setPendingUserConfig({ ...userData, id: uname });
+        setShowPinEntry(true);
+        setIsAuthenticating(false);
+        return;
+      }
+
+      // 3. Link session to this user config and create an active session document for Rules
+      const sessionData = {
+        username: uname,
+        role: userData.role,
+        linkedUid: currentUser.uid,
+        updatedAt: new Date().toISOString()
+      };
+
+      await Promise.all([
+        updateDoc(doc(db, 'user_configs', uname), sessionData),
+        setDoc(doc(db, 'user_sessions', currentUser.uid), sessionData)
+      ]);
+
+      // 4. Set local auth state
       setUser(userData.name || userData.username);
       setUserRole(userData.role);
-      setCurrentUserConfig(userData);
+      setCurrentUserConfig({ ...userData, linkedUid: currentUser.uid });
       localStorage.setItem('bt_username', uname);
       localStorage.setItem('bt_role', userData.role);
       
@@ -576,6 +618,107 @@ export default function App() {
     } catch (error: any) {
       console.error("Login detail:", error);
       alert(`Đăng nhập thất bại: ${error.message}`);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleVerifyPin = async () => {
+    if (!pendingUserConfig) return;
+    setIsAuthenticating(true);
+
+    try {
+      const uname = pendingUserConfig.username;
+      
+      // Verify PIN
+      if (pinInput !== (pendingUserConfig.pin || '061220')) {
+        alert("Mã PIN không chính xác ạ!");
+        setIsAuthenticating(false);
+        return;
+      }
+
+      let currentUser = auth.currentUser;
+      if (!currentUser) throw new Error("Phiên làm việc đã hết hạn. Vui lòng thử lại!");
+
+      const sessionData = {
+        username: uname,
+        role: pendingUserConfig.role,
+        linkedUid: currentUser.uid,
+        updatedAt: new Date().toISOString()
+      };
+
+      await Promise.all([
+        updateDoc(doc(db, 'user_configs', uname), sessionData),
+        setDoc(doc(db, 'user_sessions', currentUser.uid), sessionData)
+      ]);
+
+      setUser(pendingUserConfig.name || pendingUserConfig.username);
+      setUserRole(pendingUserConfig.role);
+      setCurrentUserConfig({ ...pendingUserConfig, linkedUid: currentUser.uid });
+      localStorage.setItem('bt_username', uname);
+      localStorage.setItem('bt_role', pendingUserConfig.role);
+      
+      setShowPinEntry(false);
+      setPinInput('');
+      setPendingUserConfig(null);
+      showNotification(`Chào mừng ${pendingUserConfig.name || uname} đã thông qua bảo mật!`);
+    } catch (error: any) {
+      alert("Xác thực PIN thất bại: " + error.message);
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleRequestRecovery = async () => {
+    if (!pendingUserConfig) return;
+    setIsRequestingRecovery(true);
+    try {
+      const recoveryCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiry = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+
+      await updateDoc(doc(db, 'user_configs', pendingUserConfig.username), {
+        recoveryCode,
+        recoveryExpiry: expiry
+      });
+
+      setIsPinRecovery(true);
+      alert("Mã khôi phục đã được tạo! Hệ thống đang gửi mail xác thực tới khoa.huynh.06.12.2000@gmail.com. Anh vui lòng kiểm tra hộp thư nhé!");
+    } catch (e: any) {
+      alert("Không thể yêu cầu khôi phục: " + e.message);
+    } finally {
+      setIsRequestingRecovery(false);
+    }
+  };
+
+  const handleVerifyRecovery = async () => {
+    if (!pendingUserConfig || !recoveryCodeInput) return;
+    
+    setIsAuthenticating(true);
+    try {
+      const userDoc = await getDocFromServer(doc(db, 'user_configs', pendingUserConfig.username));
+      const data = userDoc.data() as UserConfig;
+
+      if (data.recoveryCode === recoveryCodeInput && data.recoveryExpiry) {
+        if (new Date() > new Date(data.recoveryExpiry)) {
+          alert("Mã khôi phục đã hết hạn ạ!");
+          return;
+        }
+
+        // Reset PIN to 061220 as recovery
+        await updateDoc(doc(db, 'user_configs', pendingUserConfig.username), {
+          pin: '061220',
+          recoveryCode: null,
+          recoveryExpiry: null
+        });
+
+        alert("Khôi phục thành công! Mã PIN của anh đã được reset về mặc định '061220'. Anh hãy đăng nhập và đổi lại ngay nhé!");
+        setIsPinRecovery(false);
+        setPinInput('061220');
+      } else {
+        alert("Mã khôi phục không chính xác ạ!");
+      }
+    } catch (e: any) {
+      alert("Lỗi xác thực: " + e.message);
     } finally {
       setIsAuthenticating(false);
     }
@@ -2316,110 +2459,157 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
             </div>
 
             <div className="space-y-8">
-              <div>
-                <h4 className="text-slate-900 text-xl font-black mb-2 tracking-tight">Chào mừng trở lại</h4>
-                <p className="text-slate-500 text-xs font-medium uppercase tracking-widest">Cung cấp thông tin truy cập của bạn</p>
-              </div>
+              {showPinEntry ? (
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  <div className="flex items-center gap-3 mb-2">
+                    <button 
+                      onClick={() => {
+                        setShowPinEntry(false);
+                        setIsPinRecovery(false);
+                        setPinInput('');
+                        setRecoveryCodeInput('');
+                      }} 
+                      className="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 hover:text-slate-900 transition-colors"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                    <div>
+                      <h4 className="text-slate-900 text-xl font-black tracking-tight">
+                        {isPinRecovery ? "Khôi phục mã PIN" : "Xác thực lớp 2"}
+                      </h4>
+                      <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mt-0.5">
+                        {isPinRecovery ? "Nhập mã từ email của anh" : "Tài khoản của anh đã được bảo vệ"}
+                      </p>
+                    </div>
+                  </div>
 
-              <div className="space-y-6">
-                <button 
-                  onClick={async () => {
-                    if (isAuthenticating || !auth || !googleProvider) return;
-                    setIsAuthenticating(true);
-                    
-                    try {
-                      // Important: signInWithPopup can fail if the popup is closed or blocked.
-                      // We must handle these common cases without triggering internal assertions.
-                      const result = await signInWithPopup(auth, googleProvider);
+                  {isPinRecovery ? (
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Mã xác thực Recovery</label>
+                        <input 
+                          type="text"
+                          placeholder="Mã 6 số từ mail"
+                          maxLength={6}
+                          value={recoveryCodeInput}
+                          onChange={(e) => setRecoveryCodeInput(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleVerifyRecovery()}
+                          className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 text-center text-2xl font-black tracking-[0.5em] outline-none focus:ring-4 focus:ring-slate-100 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-200 placeholder:tracking-normal placeholder:text-sm"
+                        />
+                        <p className="text-[9px] text-slate-400 font-bold text-center mt-2 px-4 uppercase tracking-widest leading-relaxed">Mã được gửi tới: khoa.huynh.06.12.2000@gmail.com</p>
+                      </div>
                       
-                      if (result.user) {
-                        const email = result.user.email?.toLowerCase();
-                        if (email === "khoa.huynh.06.12.2000@gmail.com") {
-                          setUser(result.user.displayName || "Khoa Huỳnh");
-                          setUserRole("OWNER");
-                          localStorage.setItem("bt_username", "khoahuynh_google");
-                          localStorage.setItem("bt_role", "OWNER");
-                        } else {
-                          const userDoc = await getDocFromServer(doc(db, "user_configs", email || ""));
-                          if (userDoc.exists()) {
-                            const data = userDoc.data() as UserConfig;
-                            setUser(data.name || data.username || result.user.displayName || "User");
-                            setUserRole(data.role);
-                            localStorage.setItem("bt_username", email || "");
-                            localStorage.setItem("bt_role", data.role);
-                          } else {
-                            await signOut(auth);
-                            alert("Tài khoản Google này chưa được cấp quyền truy cập ạ!");
-                            return;
-                          }
-                        }
-                        showNotification("Đăng nhập Google thành công!");
-                      }
-                    } catch (error: any) {
-                      if (error.code === 'auth/cancelled-popup-request' || error.code === 'auth/popup-closed-by-user') {
-                        // Silent fail for user-initiated cancellations
-                        console.log("Auth cancelled by user.");
-                      } else if (error.code === 'auth/popup-blocked') {
-                        alert("🔴 Trình duyệt đã chặn cửa sổ đăng nhập.\n\nVui lòng nhấn vào biểu tượng 'Pop-up blocked' trên thanh địa chỉ và chọn 'Always allow pop-ups' để tiếp tục nhé!");
-                      } else {
-                        console.error("Google login error:", error);
-                        alert("Đăng nhập Google thất bại: " + error.message);
-                      }
-                    } finally {
-                      setIsAuthenticating(false);
-                    }
-                  }}
-                  disabled={isAuthenticating}
-                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-white text-slate-900 hover:bg-slate-50 transition-all active:scale-[0.98] rounded-2xl shadow-[0_20px_40px_-10px_rgba(0,0,0,0.05)] border border-slate-200 group"
-                >
-                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 group-hover:scale-110 transition-transform" alt="Google" />
-                  Tiếp tục qua Google
-                </button>
-
-                <div className="flex items-center gap-4 py-2">
-                  <div className="h-[1px] flex-1 bg-slate-200" />
-                  <span className="text-slate-400 text-[9px] font-black uppercase tracking-widest">Phương thức truyền thống</span>
-                  <div className="h-[1px] flex-1 bg-slate-200" />
-                </div>
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Định danh tài khoản</label>
-                    <input 
-                      type="text"
-                      placeholder="Username"
-                      value={usernameInput}
-                      onChange={(e) => setUsernameInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                      className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Mã xác thực bảo mật</label>
-                    <input 
-                      type="password"
-                      placeholder="Password"
-                      value={passwordInput}
-                      onChange={(e) => setPasswordInput(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                      className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
-                    />
-                  </div>
-                </div>
-
-                <button 
-                  onClick={handleLogin}
-                  disabled={isAuthenticating}
-                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
-                >
-                  {isAuthenticating ? (
-                    <RefreshCw className="w-5 h-5 animate-spin" />
+                      <button 
+                        onClick={handleVerifyRecovery}
+                        disabled={isAuthenticating}
+                        className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
+                      >
+                        {isAuthenticating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                        Xác nhận mã
+                      </button>
+                      
+                      <button 
+                        onClick={() => setIsPinRecovery(false)}
+                        className="w-full text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-slate-900 transition-colors"
+                      >
+                        Quay lại nhập PIN
+                      </button>
+                    </div>
                   ) : (
-                    <ShieldCheck className="w-5 h-5" />
+                    <div className="space-y-6">
+                      <div className="space-y-2 text-center">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Mã PIN bảo mật</label>
+                        <div className="flex justify-center gap-2 mt-2">
+                          {[0, 1, 2, 3, 4, 5].map((i) => (
+                            <div 
+                              key={i} 
+                              className={cn(
+                                "w-3 h-3 rounded-full transition-all duration-300 transform scale-110",
+                                pinInput.length > i ? "bg-slate-900" : "bg-slate-200"
+                              )} 
+                            />
+                          ))}
+                        </div>
+                        <input 
+                          type="password"
+                          autoFocus
+                          placeholder="Mã PIN"
+                          maxLength={6}
+                          value={pinInput}
+                          onChange={(e) => setPinInput(e.target.value.replace(/[^0-9]/g, ""))}
+                          onKeyDown={(e) => e.key === "Enter" && pinInput.length === 6 && handleVerifyPin()}
+                          className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 text-center text-3xl font-black tracking-[0.8em] outline-none focus:ring-4 focus:ring-slate-100 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-200 placeholder:tracking-normal placeholder:text-sm"
+                        />
+                      </div>
+
+                      <div className="space-y-4">
+                        <button 
+                          onClick={handleVerifyPin}
+                          disabled={isAuthenticating || pinInput.length < 6}
+                          className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
+                        >
+                          {isAuthenticating ? <RefreshCw className="w-5 h-5 animate-spin" /> : <ShieldCheck className="w-5 h-5" />}
+                          Giải mã truy cập
+                        </button>
+                        
+                        <button 
+                          onClick={handleRequestRecovery}
+                          disabled={isRequestingRecovery}
+                          className="w-full flex items-center justify-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest hover:text-slate-900 transition-colors"
+                        >
+                          {isRequestingRecovery ? <RefreshCw className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+                          Anh quên mã PIN?
+                        </button>
+                      </div>
+                    </div>
                   )}
-                  {isAuthenticating ? "Triển khai lệnh..." : "Xác nhận truy cập"}
-                </button>
-              </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div>
+                    <h4 className="text-slate-900 text-xl font-black mb-2 tracking-tight">Chào mừng trở lại</h4>
+                    <p className="text-slate-500 text-xs font-medium uppercase tracking-widest">Cung cấp thông tin truy cập của bạn</p>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Định danh tài khoản</label>
+                      <input 
+                        type="text"
+                        placeholder="Username (e.g. khoahuynh)"
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                        className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Mã xác thực bảo mật</label>
+                      <input 
+                        type="password"
+                        placeholder="Password"
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                        className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={handleLogin}
+                    disabled={isAuthenticating}
+                    className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
+                  >
+                    {isAuthenticating ? (
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="w-5 h-5" />
+                    )}
+                    {isAuthenticating ? "Triển khai lệnh..." : "Xác nhận truy cập"}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2517,51 +2707,89 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                     </div>
                   </div>
 
-                  {/* Change Password Section */}
-                  <div className="space-y-4 pt-2">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Đổi mật khẩu mới</label>
-                      <input 
-                        type="password"
-                        placeholder="Nhập mật khẩu mới..."
-                        value={newPasswordInput}
-                        onChange={(e) => setNewPasswordInput(e.target.value)}
-                        className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary focus:bg-white transition-all placeholder:text-slate-300"
-                      />
+                  {/* Change Password & PIN Section */}
+                  <div className="space-y-6 pt-2">
+                    <div className="space-y-4">
+                      <div className="space-y-1.5 focus-within:translate-x-1 transition-transform">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Đổi mật khẩu mới</label>
+                        <div className="relative flex gap-2">
+                          <input 
+                            type="password"
+                            placeholder="Mật khẩu bảo vệ..."
+                            value={newPasswordInput}
+                            onChange={(e) => setNewPasswordInput(e.target.value)}
+                            className="flex-1 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary focus:bg-white transition-all placeholder:text-slate-300"
+                          />
+                          <button 
+                            onClick={async () => {
+                              if (!newPasswordInput || newPasswordInput.length < 4) {
+                                alert("Mật khẩu mới phải có ít nhất 4 ký tự ạ!");
+                                return;
+                              }
+                              setIsUpdatingPassword(true);
+                              try {
+                                await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
+                                  password: newPasswordInput,
+                                  updatedAt: new Date().toISOString()
+                                });
+                                showNotification("Đã cập nhật mật khẩu mới thành công!");
+                                setNewPasswordInput('');
+                              } catch (error: any) {
+                                handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
+                              } finally {
+                                setIsUpdatingPassword(false);
+                              }
+                            }}
+                            disabled={isUpdatingPassword || !newPasswordInput}
+                            className="px-6 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-50 transition-all shadow-lg shadow-slate-200"
+                          >
+                            {isUpdatingPassword ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Lưu"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 focus-within:translate-x-1 transition-transform border-t border-slate-100 pt-4">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1 text-slate-900">Thiết lập mã PIN (6 số)</label>
+                        <div className="relative flex gap-2">
+                          <input 
+                            type="password"
+                            placeholder="6 chữ số PIN..."
+                            maxLength={6}
+                            value={newPinInputModal}
+                            onChange={(e) => setNewPinInputModal(e.target.value.replace(/[^0-9]/g, ""))}
+                            className="flex-1 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary focus:bg-white transition-all placeholder:text-slate-300 tracking-[0.5em]"
+                          />
+                          <button 
+                            onClick={async () => {
+                              if (newPinInputModal.length !== 6) {
+                                alert("Mã PIN phải có đúng 6 chữ số ạ!");
+                                return;
+                              }
+                              setIsUpdatingPin(true);
+                              try {
+                                await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
+                                  pin: newPinInputModal,
+                                  updatedAt: new Date().toISOString()
+                                });
+                                showNotification("Đã thiết lập mã PIN mới thành công!");
+                                setNewPinInputModal('');
+                              } catch (error: any) {
+                                handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
+                              } finally {
+                                setIsUpdatingPin(false);
+                              }
+                            }}
+                            disabled={isUpdatingPin || newPinInputModal.length !== 6}
+                            className="px-6 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-500 disabled:opacity-50 transition-all shadow-lg shadow-emerald-100"
+                          >
+                            {isUpdatingPin ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Đặt PIN"}
+                          </button>
+                        </div>
+                        <p className="text-[8px] text-slate-400 font-bold px-1 uppercase tracking-widest mt-1 leading-relaxed">
+                          Lớp bảo vệ thứ 2 bắt buộc sau mật khẩu để truy cập hệ thống.
+                        </p>
+                      </div>
                     </div>
-                    
-                    <button 
-                      onClick={async () => {
-                        if (!newPasswordInput || newPasswordInput.length < 4) {
-                          alert("Mật khẩu mới phải có ít nhất 4 ký tự ạ!");
-                          return;
-                        }
-                        
-                        setIsUpdatingPassword(true);
-                        try {
-                          await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
-                            password: newPasswordInput,
-                            updatedAt: new Date().toISOString()
-                          });
-                          showNotification("Đã cập nhật mật khẩu mới thành công!");
-                          setIsAccountModalOpen(false);
-                          setNewPasswordInput('');
-                        } catch (error: any) {
-                          handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
-                        } finally {
-                          setIsUpdatingPassword(false);
-                        }
-                      }}
-                      disabled={isUpdatingPassword || !newPasswordInput}
-                      className="w-full py-4 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
-                    >
-                      {isUpdatingPassword ? (
-                        <RefreshCw className="w-5 h-5 animate-spin" />
-                      ) : (
-                        <ShieldCheck className="w-5 h-5" />
-                      )}
-                      {isUpdatingPassword ? "Đang xử lý..." : "Cập nhật mật khẩu"}
-                    </button>
                   </div>
                 </div>
               </div>
@@ -4854,6 +5082,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                             <tr className="bg-slate-50/50">
                               <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Username</th>
                               <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Vai trò</th>
+                              <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Mật khẩu</th>
                               <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Ngày cập nhật</th>
                               <th className="py-5 px-6"></th>
                             </tr>
@@ -4882,6 +5111,11 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                       "bg-slate-50 border-slate-200 text-slate-500"
                                     )}>
                                       {config.role}
+                                    </span>
+                                  </td>
+                                  <td className="py-5 px-6">
+                                    <span className="text-[10px] font-mono font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded">
+                                      {config.role === 'OWNER' ? '••••••' : config.password}
                                     </span>
                                   </td>
                                   <td className="py-5 px-6 text-[10px] font-mono text-slate-400 font-bold">

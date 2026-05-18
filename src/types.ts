@@ -14,6 +14,10 @@ export interface UserConfig {
   role: UserRole;
   name?: string;
   updatedAt?: string;
+  pin?: string; // mã PIN 6 số
+  linkedUid?: string; // Firebase Auth UID
+  recoveryCode?: string;
+  recoveryExpiry?: string;
 }
 
 export interface Product {
