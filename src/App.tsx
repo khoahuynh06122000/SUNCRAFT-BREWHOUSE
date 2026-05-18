@@ -407,6 +407,11 @@ export default function App() {
   
   const dateInputRef = useRef<HTMLInputElement>(null);
 
+  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+  const [showPasswordInModal, setShowPasswordInModal] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
@@ -2196,9 +2201,10 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     const allItems = [
       { id: 'dashboard', label: 'Tổng quan', icon: LayoutDashboard, color: '#3b82f6' },
       { id: 'inventory', label: 'Tồn kho', icon: Package, color: '#f59e0b' },
-      // REVENUE & REPORTS RESTRICTED TO OWNER ONLY
+      // REPORTS: Available to Owner, Staff and Viewer
+      { id: 'reports', label: 'Báo cáo', icon: TrendingUp, color: '#f43f5e' },
+      // REVENUE: RESTRICTED TO OWNER ONLY
       ...(userRole === 'OWNER' ? [
-        { id: 'reports', label: 'Báo cáo', icon: TrendingUp, color: '#f43f5e' },
         { id: 'revenue-mgmt', label: 'Doanh thu', icon: FileSpreadsheet, color: '#8b5cf6' }
       ] : []),
       { id: 'in-transit', label: 'Đơn đi đường', icon: Truck, color: '#fbbf24' },
@@ -2318,10 +2324,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
               <div className="space-y-6">
                 <button 
                   onClick={async () => {
-                    if (isAuthenticating) return;
+                    if (isAuthenticating || !auth || !googleProvider) return;
                     setIsAuthenticating(true);
                     
                     try {
+                      // Important: signInWithPopup can fail if the popup is closed or blocked.
+                      // We must handle these common cases without triggering internal assertions.
                       const result = await signInWithPopup(auth, googleProvider);
                       
                       if (result.user) {
@@ -2427,8 +2435,139 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   return (
     <div className={cn(
       "flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden transition-all duration-300",
-      loading && user ? "blur-[2px] pointer-events-none select-none brightness-95" : ""
+      (loading || isAccountModalOpen) && user ? "blur-[2px] pointer-events-none select-none brightness-95" : ""
     )}>
+      {/* Account Profile Modal */}
+        {isAccountModalOpen && currentUserConfig && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+            <div 
+              onClick={() => setIsAccountModalOpen(false)}
+              className="absolute inset-0 bg-slate-900/40 backdrop-blur-md pointer-events-auto"
+            />
+            <div 
+              className="w-full max-w-md bg-white rounded-[32px] sm:rounded-[40px] shadow-2xl border border-white overflow-hidden relative z-10 pointer-events-auto"
+            >
+              <div className="p-8 sm:p-10 space-y-8">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Hồ sơ cá nhân</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Thông tin tài khoản hệ thống</p>
+                  </div>
+                  <button 
+                    onClick={() => setIsAccountModalOpen(false)}
+                    className="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center text-slate-400 hover:text-slate-900 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="space-y-6">
+                  {/* Basic Info */}
+                  <div className="p-6 bg-slate-50 rounded-3xl space-y-4 border border-slate-100">
+                    <div className="flex items-center justify-between group">
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Họ và tên</p>
+                        <p className="text-sm font-bold text-slate-900">{currentUserConfig.name || currentUserConfig.username}</p>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-white flex items-center justify-center text-primary shadow-sm border border-slate-100">
+                        <User className="w-5 h-5" />
+                      </div>
+                    </div>
+                    
+                    <div className="h-[1px] bg-slate-200/50" />
+                    
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Chức danh</p>
+                        <p className="text-sm font-bold text-slate-900">
+                          {currentUserConfig.role === 'OWNER' ? 'Thẩm quyền tối cao' : (currentUserConfig.role === 'STAFF' ? 'Chuyên viên Vận hành' : 'Người xem phân tích')}
+                        </p>
+                      </div>
+                      <div className="px-3 py-1 rounded-full bg-emerald-100 text-emerald-600 text-[9px] font-black uppercase tracking-widest">
+                        Active
+                      </div>
+                    </div>
+
+                    <div className="h-[1px] bg-slate-200/50" />
+
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Tên đăng nhập</p>
+                        <p className="text-sm font-bold text-slate-900">{currentUserConfig.username}</p>
+                      </div>
+                    </div>
+
+                    <div className="h-[1px] bg-slate-200/50" />
+
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Mật khẩu hiện tại</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-bold text-slate-900">
+                            {showPasswordInModal ? currentUserConfig.password : '••••••••'}
+                          </p>
+                          <button 
+                            onClick={() => setShowPasswordInModal(!showPasswordInModal)}
+                            className="text-slate-400 hover:text-primary transition-colors"
+                          >
+                            <Sun className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Change Password Section */}
+                  <div className="space-y-4 pt-2">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Đổi mật khẩu mới</label>
+                      <input 
+                        type="password"
+                        placeholder="Nhập mật khẩu mới..."
+                        value={newPasswordInput}
+                        onChange={(e) => setNewPasswordInput(e.target.value)}
+                        className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary focus:bg-white transition-all placeholder:text-slate-300"
+                      />
+                    </div>
+                    
+                    <button 
+                      onClick={async () => {
+                        if (!newPasswordInput || newPasswordInput.length < 4) {
+                          alert("Mật khẩu mới phải có ít nhất 4 ký tự ạ!");
+                          return;
+                        }
+                        
+                        setIsUpdatingPassword(true);
+                        try {
+                          await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
+                            password: newPasswordInput,
+                            updatedAt: new Date().toISOString()
+                          });
+                          showNotification("Đã cập nhật mật khẩu mới thành công!");
+                          setIsAccountModalOpen(false);
+                          setNewPasswordInput('');
+                        } catch (error: any) {
+                          handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
+                        } finally {
+                          setIsUpdatingPassword(false);
+                        }
+                      }}
+                      disabled={isUpdatingPassword || !newPasswordInput}
+                      className="w-full py-4 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
+                    >
+                      {isUpdatingPassword ? (
+                        <RefreshCw className="w-5 h-5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="w-5 h-5" />
+                      )}
+                      {isUpdatingPassword ? "Đang xử lý..." : "Cập nhật mật khẩu"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       {/* Processing Overlay */}
       {loading && user && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-white/5 backdrop-blur-[1px]">
@@ -2525,7 +2664,10 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
           <div className="px-6 py-8">
             <div className="bg-slate-50/50 backdrop-blur-sm rounded-[24px] p-6 border border-slate-100/50 flex flex-col gap-5">
-              <div className="flex items-center gap-4">
+              <div 
+                onClick={() => setIsAccountModalOpen(true)}
+                className="flex items-center gap-4 cursor-pointer hover:bg-slate-100/50 p-2 -m-2 rounded-2xl transition-all"
+              >
                 <div className="w-12 h-12 rounded-[16px] bg-white flex items-center justify-center text-primary font-black shadow-sm ring-1 ring-slate-100 border-b-2 border-slate-50">
                   {user?.charAt(0).toUpperCase()}
                 </div>
@@ -3366,8 +3508,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                         </Card>
                       </div>
 
-                      {/* Revenue Summary Integration */}
-                      {filteredRevenueByTime.length > 0 ? (
+                      {/* Revenue Summary Integration - OWNER ONLY */}
+                      {userRole === 'OWNER' && filteredRevenueByTime.length > 0 ? (
                         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                            <Card className="lg:col-span-2 bg-slate-900 border-none shadow-2xl p-4 sm:p-8 relative overflow-hidden group">
                                 <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full -translate-y-1/2 translate-x-1/2" />
@@ -3473,7 +3615,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                                 <Legend wrapperStyle={{ fontSize: '11px', fontWeight: 'Bold', textTransform: 'uppercase', paddingTop: '20px' }} />
                                 <Bar dataKey="Nhập" fill="#2563eb" radius={[4, 4, 0, 0]} barSize={20} />
                                 <Bar dataKey="Xuất" fill="#f43f5e" radius={[4, 4, 0, 0]} barSize={20} />
-                                <Bar dataKey="Doanh thu" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} />
+                                {userRole === 'OWNER' ? (
+                                  <Bar dataKey="Doanh thu" fill="#10b981" radius={[4, 4, 0, 0]} barSize={20} />
+                                ) : null}
                               </BarChart>
                             </ResponsiveContainer>
                           </div>
@@ -3672,7 +3816,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 </div>
               )}
 
-              {activeTab === 'revenue-mgmt' && (
+              {activeTab === 'revenue-mgmt' && userRole === 'OWNER' && (
                     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                         <div className="space-y-1">
