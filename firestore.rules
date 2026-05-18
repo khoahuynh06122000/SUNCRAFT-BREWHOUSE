@@ -23,30 +23,26 @@ service cloud.firestore {
       return request.auth.token.get('email', '').lower();
     }
 
-    // Fetch user role safely from user_configs collection
-    function getUserRole() {
-      // Sử dụng get().data.get() để tránh lỗi nếu tài liệu không tồn tại
-      return isSignedIn() ? get(/databases/$(database)/documents/user_configs/$(getEmail())).data.get('role', 'VIEWER') : 'GUEST';
-    }
-
+    // Kiểm tra quyền hống nhất
     function isOwner() {
-      return isSignedIn() && !isAnonymous() && (
-        getEmail().upper() == 'KHOA.HUYNH.06.12.2000@GMAIL.COM' || 
-        getUserRole() == 'OWNER'
+      return isSignedIn() && (
+        getEmail() == 'khoa.huynh.06.12.2000@gmail.com' ||
+        (exists(/databases/$(database)/documents/user_configs/$(getEmail())) && get(/databases/$(database)/documents/user_configs/$(getEmail())).data.get('role', 'VIEWER') == 'OWNER')
       );
     }
 
     function isStaff() {
-      return isSignedIn() && !isAnonymous() && (
-        isOwner() || getUserRole() == 'STAFF'
+      return isSignedIn() && (
+        isOwner() || 
+        (exists(/databases/$(database)/documents/user_configs/$(getEmail())) && get(/databases/$(database)/documents/user_configs/$(getEmail())).data.get('role', 'VIEWER') == 'STAFF')
       );
     }
 
     function isViewer() {
       return isSignedIn() && (
         isStaff() || 
-        (!isAnonymous() && getUserRole() == 'VIEWER') ||
-        isAnonymous()
+        (exists(/databases/$(database)/documents/user_configs/$(getEmail())) && get(/databases/$(database)/documents/user_configs/$(getEmail())).data.get('role', 'VIEWER') == 'VIEWER') ||
+        request.auth.token.firebase.sign_in_provider == 'anonymous'
       );
     }
 
