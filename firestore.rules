@@ -15,76 +15,70 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
-    }
-    
-    function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    function isAnonymous() {
+      return isSignedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
     }
 
-    function incoming() {
-      return request.resource.data;
+    function getEmail() {
+      return request.auth.token.get('email', '').lower();
     }
 
-    function existing() {
-      return resource.data;
+    // Fetch user role from user_configs collection
+    function getUserRole() {
+      return get(/databases/$(database)/documents/user_configs/$(getEmail())).data.role;
     }
-    
-    // Authorization checks
-    function isKhoa() {
-      // Return true only if the user is the specific owner email
-      return isSignedIn() && request.auth.token.get('email', '').upper() == 'KHOA.HUYNH.06.12.2000@GMAIL.COM';
+
+    function isOwner() {
+      return isSignedIn() && !isAnonymous() && (
+        getEmail().upper() == 'KHOA.HUYNH.06.12.2000@GMAIL.COM' || 
+        getUserRole() == 'OWNER'
+      );
+    }
+
+    function isStaff() {
+      return isSignedIn() && !isAnonymous() && (
+        isOwner() || getUserRole() == 'STAFF'
+      );
+    }
+
+    function isViewer() {
+      return isSignedIn() && (
+        isStaff() || 
+        (!isAnonymous() && getUserRole() == 'VIEWER') ||
+        isAnonymous()
+      );
     }
 
     // -------------------------------------------------------------------------
-    // Entities Validation
+    // Collections
     // -------------------------------------------------------------------------
     
-    // 1. Transactions (Inventory IN/OUT)
-    function isValidTransaction(data) {
-      return data.keys().hasAll(['id', 'date', 'type', 'productId', 'quantity', 'createdBy']) &&
-             data.id is string &&
-             data.date is string &&
-             data.type in ['IN', 'OUT', 'OPENING', 'LOSS', 'DAMAGE'] &&
-             data.productId is string &&
-             data.quantity is number &&
-             data.createdBy is string;
-    }
-
+    // 1. Transactions
     match /transactions/{transactionId} {
-      allow read: if isSignedIn();
-      allow create: if isSignedIn() && isValidTransaction(incoming());
-      allow update: if isSignedIn();
-      allow delete: if isKhoa();
+      allow read: if isViewer();
+      allow create: if isStaff();
+      allow update: if isStaff();
+      allow delete: if isOwner();
     }
 
-    // 2. Revenue Records (Global System Data)
-    function isValidRevenue(data) {
-      return data.keys().hasAll(['id', 'date', 'productName', 'quantity', 'unitPrice', 'totalAmount', 'partnerName']) &&
-             data.id is string &&
-             data.quantity is number &&
-             data.unitPrice is number &&
-             data.totalAmount is number;
-    }
-
+    // 2. Revenue Records
     match /revenue/{recordId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidRevenue(incoming());
-      allow delete: if isKhoa();
+      allow read: if isViewer();
+      allow create, update: if isStaff();
+      allow delete: if isOwner();
     }
 
     // 3. Partners
-    function isValidPartner(data) {
-      return data.keys().hasAll(['id', 'name', 'type']) &&
-             data.name is string && data.name.size() <= 200 &&
-             data.type in ['SUPPLIER', 'AGENT', 'RESTAURANT', 'INDIVIDUAL'];
+    match /partners/{partnerId} {
+      allow read: if isViewer();
+      allow create, update: if isStaff();
+      allow delete: if isOwner();
     }
 
-    match /partners/{partnerId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidPartner(incoming());
-      allow delete: if isKhoa();
+    // 4. User Configurations (Internal Security)
+    match /user_configs/{email} {
+      allow read: if isOwner() || (isSignedIn() && getEmail() == email.lower());
+      allow write: if isOwner();
     }
   }
 }

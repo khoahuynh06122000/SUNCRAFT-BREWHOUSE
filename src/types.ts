@@ -5,6 +5,16 @@
 
 export type Category = 'Lon' | 'Lít' | 'Chai';
 export type TransactionType = 'IN' | 'OUT' | 'OPENING' | 'LOSS' | 'DAMAGE';
+export type UserRole = 'OWNER' | 'STAFF' | 'VIEWER';
+
+export interface UserConfig {
+  id?: string;
+  username: string;
+  password?: string;
+  role: UserRole;
+  name?: string;
+  updatedAt?: string;
+}
 
 export interface Product {
   id: string;

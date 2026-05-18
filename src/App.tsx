@@ -104,7 +104,9 @@ import {
   TransactionType, 
   Category,
   BatchInfo,
-  RevenueRecord
+  RevenueRecord,
+  UserRole,
+  UserConfig
 } from './types';
 import { 
   INITIAL_PRODUCTS, 
@@ -372,56 +374,80 @@ const Select = ({ label, options, ...props }: any) => (
 // --- Main Application ---
 
 export default function App() {
-  const [user, setUser] = useState<string | null>(null);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [user, setUser] = useState<string | null>(localStorage.getItem('bt_username'));
+  const [userRole, setUserRole] = useState<UserRole>((localStorage.getItem('bt_role') as UserRole) || 'VIEWER');
+  const isOwner = userRole === 'OWNER';
+  const isAdmin = userRole === 'OWNER' || userRole === 'ADMIN';
+  const [currentUserConfig, setCurrentUserConfig] = useState<UserConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const [allUserConfigs, setAllUserConfigs] = useState<UserConfig[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>(INITIAL_TRANSACTIONS);
+  const [partners, setPartners] = useState<Partner[]>(INITIAL_PARTNERS);
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [revenueData, setRevenueData] = useState<Transaction[]>([]);
+  
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [reportSubTab, setReportSubTab] = useState<'overview' | 'detailed' | 'inventory'>('overview');
+  
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [revenuePartnerSearch, setRevenuePartnerSearch] = useState('');
+  
+  const [galleryFilter, setGalleryFilter] = useState<'all' | 'unverified' | 'verified'>('all');
+  const [galleryMonth, setGalleryMonth] = useState(new Date().toISOString().substring(0, 7));
+  const [gallerySearchQuery, setGallerySearchQuery] = useState('');
+  const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
+  const [expandedInvoices, setExpandedInvoices] = useState<Set<string>>(new Set());
+  
+  const [timeFilter, setTimeFilter] = useState<'all' | 'today' | 'yesterday' | 'week' | 'month' | 'custom'>('all');
+  const [filterBaseDate, setFilterBaseDate] = useState(new Date().toISOString().split('T')[0]);
+  const [selectedInventoryProduct, setSelectedInventoryProduct] = useState<string | null>(null);
+  
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 3000);
   };
-  const [activeTab, setActiveTab] = useState('dashboard');
-  const [reportSubTab, setReportSubTab] = useState<'summary' | 'in' | 'out'>('summary');
-  const [timeFilter, setTimeFilter] = useState<'day' | 'week' | 'month' | 'year' | 'all'>('all');
-  const [filterBaseDate, setFilterBaseDate] = useState<Date>(new Date());
-  const dateInputRef = useRef<HTMLInputElement>(null);
-  const [historySearchQuery, setHistorySearchQuery] = useState('');
-  const [batchSearchQuery, setBatchSearchQuery] = useState('');
-  const [galleryFilter, setGalleryFilter] = useState<'IN' | 'OUT'>('OUT');
-  const [selectedGalleryImage, setSelectedGalleryImage] = useState<Transaction | null>(null);
-  const [selectedInventoryProduct, setSelectedInventoryProduct] = useState<string | null>(null);
-  
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [partners, setPartners] = useState<Partner[]>([]);
-  const [revenueData, setRevenueData] = useState<RevenueRecord[]>([]);
-  const [expandedInvoices, setExpandedInvoices] = useState<string[]>([]);
-  const [revenuePartnerSearch, setRevenuePartnerSearch] = useState('');
-  const [galleryMonth, setGalleryMonth] = useState<string>('all');
-  const [gallerySearchQuery, setGallerySearchQuery] = useState<string>('');
 
-  const [products] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [showGuestNameModal, setShowGuestNameModal] = useState(false);
-  const [guestNameInput, setGuestNameInput] = useState('');
-
-  // AUTH OBSERVER
+  // AUTH SYNC (Persistent via LocalStorage for simple username auth)
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        if (firebaseUser.isAnonymous) {
-          setUser(firebaseUser.displayName || 'Guest User');
-          setUserEmail(null);
+    const savedUser = localStorage.getItem('bt_username');
+    if (savedUser) {
+      setUser(savedUser);
+      // Fetch fresh role/config
+      const unsub = onSnapshot(doc(db, 'user_configs', savedUser), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as UserConfig;
+          setUserRole(data.role || 'VIEWER');
+          setCurrentUserConfig(data);
+          localStorage.setItem('bt_role', data.role);
+        } else if (savedUser === 'khoahuynh' || savedUser === 'admin') {
+          // Hardcoded backup for first-time setup
+          setUserRole('OWNER');
         } else {
-          setUser(firebaseUser.displayName || firebaseUser.email || 'Expert');
-          setUserEmail(firebaseUser.email);
+          handleLogout();
         }
-      } else {
-        setUser(null);
-        setUserEmail(null);
-      }
-      setLoading(false);
-    });
-    return () => unsubscribe();
+        setLoading(false);
+      }, (err) => {
+        console.error("Auth sync failed:", err);
+        setLoading(false);
+      });
+      return () => unsub();
+    }
+    setLoading(false);
+  }, []);
+
+  // Force logout on first run for testing if requested
+  useEffect(() => {
+    // We'll perform a logout once to allow testing login flow as per user request
+    const hasLoggedOutForTest = sessionStorage.getItem('bt_test_logout');
+    if (!hasLoggedOutForTest) {
+      handleLogout();
+      sessionStorage.setItem('bt_test_logout', 'true');
+    }
   }, []);
 
   // FIRESTORE SYNC
@@ -474,80 +500,83 @@ export default function App() {
       handleFirestoreError(error, OperationType.GET, 'revenue');
     });
 
+    // Sync User Configs (Only for OWNER)
+    let unsubUsers = () => {};
+    if (userRole === 'OWNER') {
+      unsubUsers = onSnapshot(collection(db, 'user_configs'), (snapshot) => {
+        setAllUserConfigs(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as UserConfig)));
+      });
+    }
+
     return () => {
       unsubTransactions();
       unsubPartners();
       unsubRevenue();
+      unsubUsers();
     };
-  }, [user]);
+  }, [user, userRole]);
 
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [usernameInput, setUsernameInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
 
   const handleLogin = async () => {
     if (isAuthenticating) return;
+    
+    const uname = usernameInput.trim().toLowerCase();
+    const pword = passwordInput.trim();
+
+    if (!uname || !pword) {
+      alert("Anh vui lòng nhập đủ Username và Mật khẩu ạ!");
+      return;
+    }
+
     setIsAuthenticating(true);
     try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error: any) {
-      console.error("Login detail:", error);
-      const errorCode = error?.code || "";
-      const errorMessage = error?.message || "";
-      
-      // Kiểm tra các lỗi người dùng chủ động đóng hoặc hủy
-      if (errorCode === 'auth/popup-closed-by-user' || errorCode === 'auth/cancelled-popup-request') {
+      // 1. Initial hardcoded setup for the boss
+      if ((uname === 'khoahuynh' || uname === 'admin') && pword === '123456') {
+        const adminDoc = await getDocFromServer(doc(db, 'user_configs', uname));
+        if (!adminDoc.exists()) {
+          await setDoc(doc(db, 'user_configs', uname), {
+            username: uname,
+            password: pword,
+            role: 'OWNER',
+            name: uname === 'khoahuynh' ? 'Khoa Huỳnh' : 'Administrator',
+            updatedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      // 2. Fetch user config
+      const userDoc = await getDocFromServer(doc(db, 'user_configs', uname));
+      if (!userDoc.exists()) {
+        alert("Người dùng không tồn tại ạ. Anh liên hệ Admin để cấp quyền nhé!");
         return;
       }
-      
-      // Kiểm tra lỗi tên miền chưa được cấp phép
-      if (errorCode === 'auth/unauthorized-domain' || errorMessage.includes('unauthorized-domain')) {
-        alert(
-          "LỖI PHÂN QUYỀN: Tên miền này chưa được cấp phép trong Firebase.\n\n" +
-          "Anh hãy làm theo bước này nhé:\n" +
-          "1. Copy tên miền này: banabrewhouse.vercel.app\n" +
-          "2. Vào Firebase Console -> Authentication -> Settings.\n" +
-          "3. Thêm nó vào mục 'Authorized domains' là xong ạ!"
-        );
-      } else {
-        alert(`Đăng nhập thất bại. Vui lòng thử lại. (Mã lỗi: ${errorCode || 'Unknown'})`);
+
+      const userData = userDoc.data() as UserConfig;
+      if (userData.password !== pword) {
+        alert("Mật khẩu không chính xác ạ!");
+        return;
       }
+
+      // 3. Set local auth state
+      setUser(userData.name || userData.username);
+      setUserRole(userData.role);
+      setCurrentUserConfig(userData);
+      localStorage.setItem('bt_username', uname);
+      localStorage.setItem('bt_role', userData.role);
+      
+      showNotification(`Chào mừng ${userData.name || uname} đã quay trở lại!`);
+    } catch (error: any) {
+      console.error("Login detail:", error);
+      alert(`Đăng nhập thất bại: ${error.message}`);
     } finally {
       setIsAuthenticating(false);
     }
   };
 
-  const handleGuestLogin = async () => {
-    if (!guestNameInput.trim()) {
-      setShowGuestNameModal(true);
-      return;
-    }
-
-    try {
-      const userCredential = await signInAnonymously(auth);
-      if (userCredential.user) {
-        await updateProfile(userCredential.user, {
-          displayName: guestNameInput.trim()
-        });
-        // Force refresh user state
-        setUser(guestNameInput.trim());
-      }
-      setShowGuestNameModal(false);
-      setGuestNameInput('');
-    } catch (error: any) {
-      console.error("Guest login failed:", error);
-      if (error.code === 'auth/admin-restricted-operation') {
-        alert(
-          "LỖI HỆ THỐNG: Tính năng 'Đăng nhập ẩn danh' chưa được bật trên Firebase Console.\n\n" +
-          "Cách sửa:\n" +
-          "1. Truy cập: https://console.firebase.google.com/project/gen-lang-client-0780471401/authentication/providers\n" +
-          "2. Chọn 'Anonymous' và nhấn 'Enable'.\n" +
-          "3. Quan trọng: Nhấn nút 'SAVE' màu xanh để lưu lại.\n\n" +
-          "Sau khi làm xong, anh hãy nhấn lại nút 'Khách' nhé!"
-        );
-      } else {
-        alert("Truy cập khách thất bại. Vui lòng thử lại.");
-      }
-    }
-  };
+  // Guest Authentication removed as requested
 
   const handleHardReset = async () => {
     if (!isOwner) return;
@@ -594,7 +623,7 @@ export default function App() {
       if (errorMsg.includes('unavailable')) {
         alert("LỖI KẾT NỐI: Tin không thể kết nối tới máy chủ Firestore. Anh hãy thử tải lại trang (F5) hoặc kiểm tra lại mạng nhé.");
       } else {
-        alert("Có lỗi xảy ra khi dọn dẹp. Anh kiểm tra lại xem đã đăng nhập đúng tài khoản " + userEmail + " chưa nhé.");
+        alert("Có lỗi xảy ra khi dọn dẹp. Anh kiểm tra lại xem đã đăng nhập đúng chưa nhé.");
       }
       setLoading(false);
     }
@@ -623,11 +652,12 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    try {
-      await signOut(auth);
-    } catch (error) {
-      console.error("Logout failed:", error);
-    }
+    localStorage.removeItem('bt_username');
+    localStorage.removeItem('bt_role');
+    const u = user;
+    setUser(null);
+    setUserRole('VIEWER');
+    setCurrentUserConfig(null);
   };
 
   const sidebarOpenRef = useRef(true);
@@ -1729,13 +1759,13 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
       const entry = summaryMap.get(t.productId);
       if (entry) {
-        const price = productPriceMap.get(t.productId) || 0;
+        const price = Number(productPriceMap.get(t.productId) || 0);
         if (t.type === 'IN' || t.type === 'OPENING') {
-          entry.in += t.quantity;
-          entry.inValue += t.quantity * price;
+          entry.in += Number(t.quantity || 0);
+          entry.inValue += Number(t.quantity || 0) * price;
         } else {
-          entry.out += t.quantity;
-          entry.outValue += t.quantity * price;
+          entry.out += Number(t.quantity || 0);
+          entry.outValue += Number(t.quantity || 0) * price;
         }
       }
     });
@@ -1973,7 +2003,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     });
 
     filteredRevenueByTime.forEach(r => {
-      const cat = prodToCat.get(r.productName);
+      const cat = prodToCat.get(r.productName) as string;
       if (cat && results[cat]) {
         results[cat]['Doanh thu'] += r.quantity;
       }
@@ -2053,7 +2083,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 : (allocations.length > 1 ? `[Lô ${i+1}/${allocations.length}] ${newTransaction.notes}` : newTransaction.notes),
               batchNumber: alloc.batchNumber,
               evidencePhotoUrl: newTransaction.evidencePhotoUrl || null,
-              createdBy: userEmail || user || 'Guest',
+              createdBy: user || 'Guest',
               referenceGroupId: referenceGroupId,
               status: newTransaction.isInTransit ? 'in_transit' : 'completed',
               originalQuantity: alloc.quantity
@@ -2075,7 +2105,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
             notes: validItems.length > 1 ? `[Món ${validItems.indexOf(item) + 1}/${validItems.length}] ${newTransaction.notes}` : newTransaction.notes,
             batchNumber: item.batchNumber || null,
             evidencePhotoUrl: newTransaction.evidencePhotoUrl || null,
-            createdBy: userEmail || user || 'Guest',
+            createdBy: user || 'Guest',
             referenceGroupId: referenceGroupId
           };
           batch.set(doc(db, 'transactions', transactionId), transaction);
@@ -2146,38 +2176,43 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   };
 
   const isSuperAdmin = useMemo(() => {
-    // Everyone signed in can now perform most operations
-    return !!user;
-  }, [user]);
-
-  const isOwner = useMemo(() => {
-    // ONLY the specific owner can delete
-    return userEmail?.toUpperCase() === 'KHOA.HUYNH.06.12.2000@GMAIL.COM';
-  }, [userEmail]);
+    return userRole === 'OWNER';
+  }, [userRole]);
 
   const isAuthorizedFull = useMemo(() => {
-    // Everyone signed in can now see all reports and features
-    return !!user;
-  }, [user]);
+    return userRole === 'OWNER' || userRole === 'STAFF';
+  }, [userRole]);
+
+  const canWrite = useMemo(() => {
+    return userRole === 'OWNER' || userRole === 'STAFF';
+  }, [userRole]);
+
+  const canManageUsers = useMemo(() => {
+    return userRole === 'OWNER';
+  }, [userRole]);
 
   // Nav items configuration
   const navItems = useMemo(() => {
     const allItems = [
       { id: 'dashboard', label: 'Tổng quan', icon: LayoutDashboard, color: '#3b82f6' },
       { id: 'inventory', label: 'Tồn kho', icon: Package, color: '#f59e0b' },
-      { id: 'reports', label: 'Báo cáo', icon: TrendingUp, color: '#f43f5e' },
-      { id: 'revenue-mgmt', label: 'Doanh thu', icon: FileSpreadsheet, color: '#8b5cf6' },
+      // REVENUE & REPORTS RESTRICTED TO OWNER ONLY
+      ...(userRole === 'OWNER' ? [
+        { id: 'reports', label: 'Báo cáo', icon: TrendingUp, color: '#f43f5e' },
+        { id: 'revenue-mgmt', label: 'Doanh thu', icon: FileSpreadsheet, color: '#8b5cf6' }
+      ] : []),
       { id: 'in-transit', label: 'Đơn đi đường', icon: Truck, color: '#fbbf24' },
       { id: 'import', label: 'Nhập kho', icon: PlusCircle, color: '#10b981' },
       { id: 'export', label: 'Xuất kho', icon: MinusCircle, color: '#f97316' },
       { id: 'gallery', label: 'Thư viện ảnh', icon: ImageIcon, color: '#ec4899' },
       { id: 'partners', label: 'Đối tác', icon: Users, color: '#6366f1' },
       { id: 'history', label: 'Lịch sử', icon: History, color: '#64748b' },
+      // SETTINGS RESTRICTED TO OWNER ONLY
+      ...(userRole === 'OWNER' ? [{ id: 'settings', label: 'Cài đặt', icon: ShieldCheck, color: '#ef4444' }] : []),
     ];
     
-    // Everyone sees reports and revenue management now
     return allItems;
-  }, [isAuthorizedFull]);
+  }, [userRole]);
 
   // Handle unauthorized tab access
   useEffect(() => {
@@ -2189,16 +2224,22 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   if (loading && !user) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-6 relative overflow-hidden">
         {/* Superior Background Architecture */}
-        <div className="absolute top-0 right-0 w-[1000px] h-[1000px] bg-primary/20 blur-[160px] rounded-full -mr-[500px] -mt-[500px] pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-[800px] h-[800px] bg-emerald-500/10 blur-[130px] rounded-full -ml-[400px] -mb-[400px] pointer-events-none" />
+        <div className="absolute inset-0 z-0">
+          <img 
+            src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2672&auto=format&fit=crop" 
+            className="w-full h-full object-cover opacity-10 scale-110 blur-[5px]"
+            alt="Background"
+          />
+          <div className="absolute inset-0 bg-gradient-to-tr from-[#0f172a] via-[#1e293b]/50 to-[#0f172a] opacity-90" />
+        </div>
         
         <div className="flex flex-col items-center gap-12 relative z-10">
           <div className="relative">
-            <div className="w-24 h-24 border-4 border-white/5 border-t-amber-500 rounded-full animate-spin" />
+            <div className="w-24 h-24 border-4 border-white/5 border-t-slate-400 rounded-full animate-spin" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Beer className="w-8 h-8 text-amber-500/50 animate-pulse" />
+              <Beer className="w-8 h-8 text-slate-400/50 animate-pulse" />
             </div>
           </div>
           <div className="text-center space-y-4">
@@ -2212,104 +2253,162 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6 relative overflow-hidden font-sans">
-        {/* Superior Background Architecture */}
-        <div className="absolute top-0 right-0 w-[1000px] h-[1000px] bg-primary/20 blur-[160px] rounded-full -mr-[500px] -mt-[500px] pointer-events-none" />
-        <div className="absolute bottom-0 left-0 w-[800px] h-[800px] bg-emerald-500/10 blur-[130px] rounded-full -ml-[400px] -mb-[400px] pointer-events-none" />
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-6 relative overflow-hidden font-sans">
+        {/* Cinematic Backdrop */}
+        <div className="absolute inset-0 z-0">
+          <img 
+            src="https://images.unsplash.com/photo-1516339901601-2e1b62dc0c45?q=80&w=2542&auto=format&fit=crop" 
+            className="w-full h-full object-cover opacity-20 scale-110 blur-[2px]"
+            alt="Background"
+          />
+          <div className="absolute inset-0 bg-gradient-to-tr from-[#020617] via-transparent to-[#0f172a] opacity-90" />
+          {/* Animated Glows */}
+          <div className="absolute top-1/4 -left-20 w-[600px] h-[600px] bg-slate-500/10 blur-[120px] rounded-full animate-pulse" />
+          <div className="absolute bottom-1/4 -right-20 w-[500px] h-[500px] bg-blue-500/5 blur-[100px] rounded-full animate-pulse delay-1000" />
+        </div>
         
-        <div 
-          className="w-full max-w-md relative z-10"
-        >
-          <div className="bg-white/10 backdrop-blur-3xl rounded-[32px] sm:rounded-[48px] p-8 sm:p-12 shadow-2xl border border-white/10 ring-1 ring-white/5">
-            <div className="flex flex-col items-center text-center mb-8 sm:mb-14">
-              <div className="w-16 h-16 sm:w-24 sm:h-24 bg-white/5 backdrop-blur-md rounded-[24px] sm:rounded-[36px] flex items-center justify-center border border-white/15 mb-6 sm:mb-10 shadow-inner group relative overflow-hidden">
-                <div className="absolute inset-0 bg-gradient-to-br from-amber-400 to-orange-600 opacity-20 group-hover:opacity-40 transition-opacity" />
-                <Beer className="w-8 h-8 sm:w-12 sm:h-12 text-amber-400 relative z-10 group-hover:scale-110 transition-transform duration-700" />
+        <div className="w-full max-w-[1000px] grid lg:grid-cols-2 bg-slate-950/40 backdrop-blur-2xl rounded-[40px] overflow-hidden border border-white/5 shadow-[0_32px_120px_-20px_rgba(0,0,0,0.8)] relative z-10">
+          {/* Left Side: Branding & Info */}
+          <div className="hidden lg:flex flex-col justify-between p-16 border-r border-white/5 bg-gradient-to-br from-white/[0.02] to-transparent">
+            <div>
+              <div className="flex items-center gap-4 mb-12">
+                <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center border border-white/10">
+                  <Beer className="w-6 h-6 text-slate-300" />
+                </div>
+                <div>
+                  <h3 className="text-white text-xs font-black uppercase tracking-[0.3em]">Hệ thống vận hành</h3>
+                  <p className="text-white/30 text-[10px] uppercase font-bold tracking-widest">Bana BrewHouse OS v3.5</p>
+                </div>
               </div>
-              <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight leading-none mb-3 sm:mb-4 font-serif italic selection:bg-white/10 uppercase">Bia Bà Nà</h1>
-              <div className="flex items-center gap-2 sm:gap-3">
-                <div className="h-[1px] w-3 sm:w-4 bg-white/20" />
-                <p className="text-white/40 text-[8px] sm:text-[9px] font-black uppercase tracking-[0.3em] sm:tracking-[0.4em]">SunCraft brewing system</p>
-                <div className="h-[1px] w-3 sm:w-4 bg-white/20" />
+              
+              <div className="space-y-6">
+                <h2 className="text-5xl font-black text-white leading-tight font-serif italic italic tracking-tight">Tinh hoa <br /> <span className="text-slate-400">Bia Bà Nà</span></h2>
+                <div className="w-20 h-1 bg-slate-500 rounded-full" />
+                <p className="text-white/40 text-sm leading-relaxed max-w-sm font-medium">
+                  Hệ thống quản trị tài nguyên và doanh nghiệp tích hợp dành riêng cho đội ngũ vận hành Bia Bà Nà. Vui lòng xác thực danh tính để bắt đầu.
+                </p>
               </div>
             </div>
-            
-            <div className="space-y-5 sm:space-y-6">
-              <p className="text-center text-white/60 text-[10px] sm:text-[11px] font-medium leading-relaxed mb-4 uppercase tracking-widest">
-                Vui lòng đăng nhập để truy cập hệ thống console
-              </p>
-              
-              <div className="flex flex-col gap-3 sm:gap-4">
+
+            <div className="flex items-center gap-6">
+              <div className="flex -space-x-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="w-10 h-10 rounded-full border-2 border-[#020617] bg-slate-900 flex items-center justify-center text-[10px] font-black text-white">
+                    {i === 3 ? '+24' : 'U'}
+                  </div>
+                ))}
+              </div>
+              <p className="text-white/20 text-[10px] font-black uppercase tracking-widest">Nhân sự trực tuyến hệ thống</p>
+            </div>
+          </div>
+
+          {/* Right Side: Login Form */}
+          <div className="p-8 sm:p-16 flex flex-col justify-center">
+            <div className="mb-10 lg:hidden text-center">
+              <Beer className="w-12 h-12 text-slate-400 mx-auto mb-4" />
+              <h1 className="text-3xl font-black text-white tracking-tight uppercase font-serif italic">Bia Bà Nà</h1>
+            </div>
+
+            <div className="space-y-8">
+              <div>
+                <h4 className="text-white text-xl font-black mb-2 tracking-tight">Chào mừng trở lại</h4>
+                <p className="text-white/40 text-xs font-medium uppercase tracking-widest">Cung cấp thông tin truy cập của bạn</p>
+              </div>
+
+              <div className="space-y-6">
+                <button 
+                  onClick={async () => {
+                    setIsAuthenticating(true);
+                    try {
+                      const result = await signInWithPopup(auth, googleProvider);
+                      if (result.user) {
+                        const email = result.user.email?.toLowerCase();
+                        if (email === "khoa.huynh.06.12.2000@gmail.com") {
+                          setUser(result.user.displayName || "Khoa Huỳnh");
+                          setUserRole("OWNER");
+                          localStorage.setItem("bt_username", "khoahuynh_google");
+                          localStorage.setItem("bt_role", "OWNER");
+                        } else {
+                          const userDoc = await getDocFromServer(doc(db, "user_configs", email || ""));
+                          if (userDoc.exists()) {
+                            const data = userDoc.data() as UserConfig;
+                            setUser(data.name || data.username || result.user.displayName || "User");
+                            setUserRole(data.role);
+                            localStorage.setItem("bt_username", email || "");
+                            localStorage.setItem("bt_role", data.role);
+                          } else {
+                            await signOut(auth);
+                            alert("Tài khoản Google này chưa được cấp quyền truy cập ạ!");
+                            return;
+                          }
+                        }
+                        showNotification("Đăng nhập Google thành công!");
+                      }
+                    } catch (error: any) {
+                      console.error("Google login error:", error);
+                      alert("Đăng nhập Google thất bại ạ.");
+                    } finally {
+                      setIsAuthenticating(false);
+                    }
+                  }}
+                  disabled={isAuthenticating}
+                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-white text-slate-900 hover:bg-slate-100 transition-all active:scale-[0.98] rounded-2xl shadow-[0_20px_40px_-10px_rgba(255,255,255,0.1)] group"
+                >
+                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 group-hover:scale-110 transition-transform" alt="Google" />
+                  Tiếp tục qua Google
+                </button>
+
+                <div className="flex items-center gap-4 py-2">
+                  <div className="h-[1px] flex-1 bg-white/5" />
+                  <span className="text-white/10 text-[9px] font-black uppercase tracking-widest">Phương thức truyền thống</span>
+                  <div className="h-[1px] flex-1 bg-white/5" />
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] ml-1">Định danh tài khoản</label>
+                    <input 
+                      type="text"
+                      placeholder="Username"
+                      value={usernameInput}
+                      onChange={(e) => setUsernameInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                      className="w-full px-6 py-4 bg-white/[0.03] border border-white/10 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-slate-500/30 focus:bg-white/[0.05] focus:border-slate-500/50 transition-all placeholder:text-white/5"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] ml-1">Mã xác thực bảo mật</label>
+                    <input 
+                      type="password"
+                      placeholder="Password"
+                      value={passwordInput}
+                      onChange={(e) => setPasswordInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                      className="w-full px-6 py-4 bg-white/[0.03] border border-white/10 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-slate-500/30 focus:bg-white/[0.05] focus:border-slate-500/50 transition-all placeholder:text-white/5"
+                    />
+                  </div>
+                </div>
+
                 <button 
                   onClick={handleLogin}
                   disabled={isAuthenticating}
-                  className="w-full py-4 sm:py-5 flex items-center justify-center gap-3 text-[10px] sm:text-[11px] tracking-[0.15em] sm:tracking-[0.2em] uppercase font-black bg-white text-slate-900 border-none hover:bg-slate-100 shadow-2xl transition-all active:scale-[0.98] rounded-xl sm:rounded-2xl disabled:opacity-50 disabled:cursor-wait"
+                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-800/10 text-slate-300 border border-slate-700/50 hover:bg-slate-800 hover:text-white transition-all active:scale-[0.98] rounded-2xl"
                 >
                   {isAuthenticating ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
                   ) : (
-                    <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5" alt="Google" />
+                    <ShieldCheck className="w-5 h-5" />
                   )}
-                  {isAuthenticating ? 'Đang xác thực...' : 'Sign in with Google'}
+                  {isAuthenticating ? "Triển khai lệnh..." : "Xác nhận truy cập"}
                 </button>
-
-                <div className="flex items-center gap-4 py-2">
-                  <div className="h-[1px] flex-1 bg-white/10" />
-                  <span className="text-white/20 text-[9px] font-black uppercase tracking-widest">Hoặc</span>
-                  <div className="h-[1px] flex-1 bg-white/10" />
-                </div>
-
-                {!showGuestNameModal ? (
-                  <button 
-                    onClick={() => setShowGuestNameModal(true)}
-                    className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-white/5 text-white/80 border border-white/10 hover:bg-white/10 transition-all active:scale-[0.98] rounded-2xl backdrop-blur-md"
-                  >
-                    <Users className="w-5 h-5 opacity-40" />
-                    Tiếp tục với tư cách Khách
-                  </button>
-                ) : (
-                  <div 
-                    className="space-y-4 p-6 bg-white/5 rounded-[24px] border border-white/10 backdrop-blur-3xl"
-                  >
-                    <p className="text-[9px] font-black text-white/40 uppercase tracking-widest mb-2 px-1">Nhập tên của bạn</p>
-                    <input 
-                      autoFocus
-                      placeholder="VD: Nguyễn Văn A..."
-                      value={guestNameInput}
-                      onChange={(e) => setGuestNameInput(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleGuestLogin()}
-                      className="w-full px-5 py-4 bg-white/10 border border-white/10 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-white/20"
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <button 
-                        onClick={() => { setShowGuestNameModal(false); setGuestNameInput(''); }}
-                        className="py-3.5 text-[10px] font-black uppercase tracking-widest text-white/40 hover:text-white transition-colors"
-                      >
-                        Hủy
-                      </button>
-                      <button 
-                        onClick={handleGuestLogin}
-                        disabled={!guestNameInput.trim()}
-                        className="py-3.5 bg-white text-slate-900 rounded-xl text-[10px] font-black uppercase tracking-widest disabled:opacity-20 active:scale-95 transition-all"
-                      >
-                        Xác nhận
-                      </button>
-                    </div>
-                  </div>
-                )}
               </div>
-            </div>
-            
-            <div className="mt-16 pt-10 border-t border-white/5 flex justify-between items-center opacity-10">
-              <div className="flex gap-4">
-                <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                <div className="w-1.5 h-1.5 rounded-full bg-white opacity-50" />
-                <div className="w-1.5 h-1.5 rounded-full bg-white opacity-25" />
-              </div>
-              <span className="text-[9px] font-black text-white uppercase tracking-widest">Cloud Edition v3.0</span>
             </div>
           </div>
-          <p className="text-center text-white/10 text-[8px] font-black uppercase tracking-[0.5em] mt-10">Zero-Trust Cloud Security Enforced</p>
+        </div>
+
+        {/* Footer info */}
+        <div className="absolute inset-x-0 bottom-8 flex justify-center items-center">
+          <p className="text-[9px] font-black text-white/10 uppercase tracking-[0.5em]">Tài sản thuộc Bana BrewHouse • Bảo mật mức 4 • Tin Tin OS</p>
         </div>
       </div>
     );
@@ -2424,7 +2523,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   <p className="text-xs font-black text-slate-900 truncate tracking-tight">{user}</p>
                   <div className="flex items-center gap-1.5 mt-1">
                     <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">{user === 'Guest' ? 'Guest Access' : (user === 'ADMIN' ? 'Full Authority' : 'Expert Analyst')}</p>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest truncate">
+                      {userRole === 'OWNER' ? 'Thẩm quyền tối cao' : (userRole === 'STAFF' ? 'Chuyên viên Vận hành' : 'Người xem phân tích')}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -2588,7 +2689,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
               {activeTab === 'dashboard' && (
                 <>
-                  {isAuthorizedFull && (
+                  {userRole === 'OWNER' && (
                     <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-5">
                     <StatCard 
                       title="TỔNG DOANH THU" 
@@ -4509,6 +4610,158 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                     <div className="absolute top-0 right-0 w-64 h-64 bg-slate-50 rounded-full -mr-32 -mt-32 opacity-20 pointer-events-none" />
                     <div className="absolute bottom-0 left-0 w-48 h-48 bg-slate-50 rounded-full -ml-24 -mb-24 opacity-20 pointer-events-none" />
                   </Card>
+                </div>
+              )}
+
+              {activeTab === 'settings' && (
+                <div className="space-y-8 animate-in fade-in duration-500">
+                  <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                    <div className="space-y-2">
+                       <h3 className="text-2xl font-black text-slate-900 tracking-tight font-serif italic">Thiết lập Thẩm quyền</h3>
+                       <p className="text-xs font-bold text-slate-400 uppercase tracking-[0.2em]">Phân quyền truy cập hệ thống theo Email</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    <Card title="Cấp quyền người dùng mới" className="lg:col-span-4 h-fit">
+                      <div className="space-y-6">
+                        <Input 
+                          label="Username (Tên đăng nhập)"
+                          placeholder="ví dụ: nhanvien01"
+                          id="new-user-username"
+                        />
+                        <Input 
+                          label="Mật khẩu"
+                          type="password"
+                          placeholder="Nhập mật khẩu"
+                          id="new-user-password"
+                        />
+                        <Input 
+                          label="Tên hiển thị"
+                          placeholder="ví dụ: Nguyễn Văn A"
+                          id="new-user-name"
+                        />
+                        <Select 
+                          label="Vai trò cấp bậc"
+                          id="new-user-role"
+                          options={[
+                            { value: 'STAFF', label: 'STAFF - Nhân viên vận hành (Nhập/Xuất)' },
+                            { value: 'VIEWER', label: 'VIEWER - Người xem (Báo cáo/Tồn kho)' },
+                            { value: 'OWNER', label: 'OWNER - Quản trị viên toàn quyền' },
+                          ]}
+                        />
+                        <Button 
+                          className="w-full py-4"
+                          onClick={async () => {
+                            const userEl = document.getElementById('new-user-username') as HTMLInputElement;
+                            const passEl = document.getElementById('new-user-password') as HTMLInputElement;
+                            const nameEl = document.getElementById('new-user-name') as HTMLInputElement;
+                            const roleEl = document.getElementById('new-user-role') as HTMLSelectElement;
+                            
+                            const username = userEl.value.trim().toLowerCase();
+                            const password = passEl.value.trim();
+                            const name = nameEl.value.trim();
+                            const role = roleEl.value as UserRole;
+
+                            if (!username || !password) {
+                              alert("Vui lòng nhập đủ Username và Mật khẩu ạ!");
+                              return;
+                            }
+
+                            try {
+                              setLoading(true);
+                              await setDoc(doc(db, 'user_configs', username), {
+                                username,
+                                password,
+                                name,
+                                role,
+                                updatedAt: new Date().toISOString()
+                              });
+                              showNotification(`Đã cấp quyền ${role} cho ${username} thành công!`);
+                              userEl.value = '';
+                              passEl.value = '';
+                              nameEl.value = '';
+                            } catch (err) {
+                              handleFirestoreError(err, OperationType.WRITE, 'user_configs');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }}
+                        >
+                          XÁC NHẬN CẤP QUYỀN
+                        </Button>
+                      </div>
+                    </Card>
+
+                    <Card title="Danh sách Thẩm quyền hiện tại" className="lg:col-span-8" noPadding>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                          <thead>
+                            <tr className="bg-slate-50/50">
+                              <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Username</th>
+                              <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Vai trò</th>
+                              <th className="font-bold text-[10px] text-slate-400 uppercase tracking-widest py-5 px-6">Ngày cập nhật</th>
+                              <th className="py-5 px-6"></th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 italic">
+                            {allUserConfigs.length === 0 ? (
+                              <tr>
+                                <td colSpan={4} className="py-12 text-center text-slate-300 font-bold uppercase text-[10px] tracking-widest">
+                                  Chưa có danh sách tùy chỉnh (Mặc định khoahuynh là OWNER)
+                                </td>
+                              </tr>
+                            ) : (
+                              allUserConfigs.map((config) => (
+                                <tr key={config.username} className="hover:bg-slate-50/50 transition-colors">
+                                  <td className="py-5 px-6">
+                                    <div className="flex flex-col">
+                                      <span className="text-sm font-black text-slate-900">{config.name || 'N/A'}</span>
+                                      <span className="text-[10px] font-mono text-slate-400 font-bold">{config.username}</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-5 px-6">
+                                    <span className={cn(
+                                      "px-3 py-1 rounded-lg text-[9px] font-black uppercase tracking-widest border",
+                                      config.role === 'OWNER' ? "bg-rose-50 border-rose-100 text-rose-600" :
+                                      config.role === 'STAFF' ? "bg-amber-50 border-amber-100 text-amber-600" :
+                                      "bg-slate-50 border-slate-200 text-slate-500"
+                                    )}>
+                                      {config.role}
+                                    </span>
+                                  </td>
+                                  <td className="py-5 px-6 text-[10px] font-mono text-slate-400 font-bold">
+                                    {config.updatedAt ? formatDisplayDate(config.updatedAt) : '—'}
+                                  </td>
+                                  <td className="py-5 px-6 text-right">
+                                    <button 
+                                      onClick={async () => {
+                                        if (config.username === 'khoahuynh' || config.username === 'admin') {
+                                          alert("Tin Tin từ chối: Anh không thể xóa tài khoản Thẩm quyền gốc ạ!");
+                                          return;
+                                        }
+                                        if (window.confirm(`Anh có chắc chắn muốn thu hồi quyền của ${config.username} không?`)) {
+                                          try {
+                                            await deleteDoc(doc(db, 'user_configs', config.username));
+                                            showNotification("Đã thu hồi quyền truy cập.");
+                                          } catch (err) {
+                                            handleFirestoreError(err, OperationType.DELETE, `user_configs/${config.username}`);
+                                          }
+                                        }
+                                      }}
+                                      className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
+                  </div>
                 </div>
               )}
 

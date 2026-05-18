@@ -58,6 +58,19 @@
         "type": { "type": "string", "enum": ["SUPPLIER", "AGENT", "RESTAURANT", "INDIVIDUAL"] }
       },
       "required": ["id", "name", "type"]
+    },
+    "UserConfig": {
+      "title": "User Configuration",
+      "description": "Role-based access control settings for users",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "password": { "type": "string" },
+        "role": { "type": "string", "enum": ["OWNER", "STAFF", "VIEWER"] },
+        "name": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "password", "role"]
     }
   },
   "firestore": {
@@ -72,6 +85,10 @@
     "partners": {
       "schema": "Partner",
       "description": "Official partner registry"
+    },
+    "user_configs": {
+      "schema": "UserConfig",
+      "description": "Registry of authorized users and their roles"
     }
   }
 }
