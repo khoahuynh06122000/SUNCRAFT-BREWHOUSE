@@ -2224,27 +2224,27 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   if (loading && !user) {
     return (
-      <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-6 relative overflow-hidden">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 relative overflow-hidden">
         {/* Superior Background Architecture */}
         <div className="absolute inset-0 z-0">
           <img 
-            src="https://images.unsplash.com/photo-1451187580459-43490279c0fa?q=80&w=2672&auto=format&fit=crop" 
-            className="w-full h-full object-cover opacity-10 scale-110 blur-[5px]"
+            src="https://images.unsplash.com/photo-1554469384-e58fac16e23a?q=80&w=2574&auto=format&fit=crop" 
+            className="w-full h-full object-cover opacity-30 scale-110 blur-[3px]"
             alt="Background"
           />
-          <div className="absolute inset-0 bg-gradient-to-tr from-[#0f172a] via-[#1e293b]/50 to-[#0f172a] opacity-90" />
+          <div className="absolute inset-0 bg-gradient-to-tr from-slate-100/80 via-white/40 to-slate-100/80 opacity-90" />
         </div>
         
         <div className="flex flex-col items-center gap-12 relative z-10">
           <div className="relative">
-            <div className="w-24 h-24 border-4 border-white/5 border-t-slate-400 rounded-full animate-spin" />
+            <div className="w-24 h-24 border-4 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Beer className="w-8 h-8 text-slate-400/50 animate-pulse" />
+              <Beer className="w-8 h-8 text-slate-400 animate-pulse" />
             </div>
           </div>
           <div className="text-center space-y-4">
-            <h1 className="text-4xl font-black text-white tracking-widest font-serif italic uppercase">Bia Bà Nà</h1>
-            <p className="text-white/30 text-[10px] font-black uppercase tracking-[0.5em] animate-pulse">Đang kết nối hệ thống dữ liệu...</p>
+            <h1 className="text-4xl font-black text-slate-900 tracking-widest font-serif italic uppercase">Bia Bà Nà</h1>
+            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.5em] animate-pulse">Đang kết nối hệ thống dữ liệu...</p>
           </div>
         </div>
       </div>
@@ -2253,38 +2253,38 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-6 relative overflow-hidden font-sans">
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6 relative overflow-hidden font-sans">
         {/* Cinematic Backdrop */}
         <div className="absolute inset-0 z-0">
           <img 
-            src="https://images.unsplash.com/photo-1516339901601-2e1b62dc0c45?q=80&w=2542&auto=format&fit=crop" 
-            className="w-full h-full object-cover opacity-20 scale-110 blur-[2px]"
+            src="https://images.unsplash.com/photo-1497366216548-37526070297c?q=80&w=2669&auto=format&fit=crop" 
+            className="w-full h-full object-cover opacity-40 scale-110 blur-[1px]"
             alt="Background"
           />
-          <div className="absolute inset-0 bg-gradient-to-tr from-[#020617] via-transparent to-[#0f172a] opacity-90" />
+          <div className="absolute inset-0 bg-gradient-to-tr from-slate-100/90 via-white/60 to-slate-200/90" />
           {/* Animated Glows */}
-          <div className="absolute top-1/4 -left-20 w-[600px] h-[600px] bg-slate-500/10 blur-[120px] rounded-full animate-pulse" />
-          <div className="absolute bottom-1/4 -right-20 w-[500px] h-[500px] bg-blue-500/5 blur-[100px] rounded-full animate-pulse delay-1000" />
+          <div className="absolute top-1/4 -left-20 w-[600px] h-[600px] bg-white/40 blur-[120px] rounded-full animate-pulse" />
+          <div className="absolute bottom-1/4 -right-20 w-[500px] h-[500px] bg-slate-300/20 blur-[100px] rounded-full animate-pulse delay-1000" />
         </div>
         
-        <div className="w-full max-w-[1000px] grid lg:grid-cols-2 bg-slate-950/40 backdrop-blur-2xl rounded-[40px] overflow-hidden border border-white/5 shadow-[0_32px_120px_-20px_rgba(0,0,0,0.8)] relative z-10">
+        <div className="w-full max-w-[1000px] grid lg:grid-cols-2 bg-white/70 backdrop-blur-3xl rounded-[40px] overflow-hidden border border-white shadow-[0_32px_120px_-20px_rgba(0,0,0,0.15)] relative z-10 ring-1 ring-black/[0.05]">
           {/* Left Side: Branding & Info */}
-          <div className="hidden lg:flex flex-col justify-between p-16 border-r border-white/5 bg-gradient-to-br from-white/[0.02] to-transparent">
+          <div className="hidden lg:flex flex-col justify-between p-16 border-r border-slate-200 bg-gradient-to-br from-slate-50 to-white/30">
             <div>
               <div className="flex items-center gap-4 mb-12">
-                <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center border border-white/10">
-                  <Beer className="w-6 h-6 text-slate-300" />
+                <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center border border-slate-200 shadow-sm">
+                  <Beer className="w-6 h-6 text-slate-600" />
                 </div>
                 <div>
-                  <h3 className="text-white text-xs font-black uppercase tracking-[0.3em]">Hệ thống vận hành</h3>
-                  <p className="text-white/30 text-[10px] uppercase font-bold tracking-widest">Bana BrewHouse OS v3.5</p>
+                  <h3 className="text-slate-900 text-xs font-black uppercase tracking-[0.3em]">Hệ thống vận hành</h3>
+                  <p className="text-slate-400 text-[10px] uppercase font-bold tracking-widest">Bana BrewHouse OS v3.5</p>
                 </div>
               </div>
               
               <div className="space-y-6">
-                <h2 className="text-5xl font-black text-white leading-tight font-serif italic italic tracking-tight">Tinh hoa <br /> <span className="text-slate-400">Bia Bà Nà</span></h2>
-                <div className="w-20 h-1 bg-slate-500 rounded-full" />
-                <p className="text-white/40 text-sm leading-relaxed max-w-sm font-medium">
+                <h2 className="text-5xl font-black text-slate-900 leading-tight font-serif italic italic tracking-tight">Tinh hoa <br /> <span className="text-slate-500">Bia Bà Nà</span></h2>
+                <div className="w-20 h-1 bg-slate-900 rounded-full" />
+                <p className="text-slate-600 text-sm leading-relaxed max-w-sm font-medium">
                   Hệ thống quản trị tài nguyên và doanh nghiệp tích hợp dành riêng cho đội ngũ vận hành Bia Bà Nà. Vui lòng xác thực danh tính để bắt đầu.
                 </p>
               </div>
@@ -2293,26 +2293,26 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
             <div className="flex items-center gap-6">
               <div className="flex -space-x-3">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="w-10 h-10 rounded-full border-2 border-[#020617] bg-slate-900 flex items-center justify-center text-[10px] font-black text-white">
+                  <div key={i} className="w-10 h-10 rounded-full border-2 border-white bg-slate-100 flex items-center justify-center text-[10px] font-black text-slate-600 shadow-sm">
                     {i === 3 ? '+24' : 'U'}
                   </div>
                 ))}
               </div>
-              <p className="text-white/20 text-[10px] font-black uppercase tracking-widest">Nhân sự trực tuyến hệ thống</p>
+              <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Nhân sự trực tuyến hệ thống</p>
             </div>
           </div>
 
           {/* Right Side: Login Form */}
-          <div className="p-8 sm:p-16 flex flex-col justify-center">
+          <div className="p-8 sm:p-16 flex flex-col justify-center bg-white/50 backdrop-blur-md">
             <div className="mb-10 lg:hidden text-center">
-              <Beer className="w-12 h-12 text-slate-400 mx-auto mb-4" />
-              <h1 className="text-3xl font-black text-white tracking-tight uppercase font-serif italic">Bia Bà Nà</h1>
+              <Beer className="w-12 h-12 text-slate-700 mx-auto mb-4" />
+              <h1 className="text-3xl font-black text-slate-900 tracking-tight uppercase font-serif italic">Bia Bà Nà</h1>
             </div>
 
             <div className="space-y-8">
               <div>
-                <h4 className="text-white text-xl font-black mb-2 tracking-tight">Chào mừng trở lại</h4>
-                <p className="text-white/40 text-xs font-medium uppercase tracking-widest">Cung cấp thông tin truy cập của bạn</p>
+                <h4 className="text-slate-900 text-xl font-black mb-2 tracking-tight">Chào mừng trở lại</h4>
+                <p className="text-slate-500 text-xs font-medium uppercase tracking-widest">Cung cấp thông tin truy cập của bạn</p>
               </div>
 
               <div className="space-y-6">
@@ -2352,39 +2352,39 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                     }
                   }}
                   disabled={isAuthenticating}
-                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-white text-slate-900 hover:bg-slate-100 transition-all active:scale-[0.98] rounded-2xl shadow-[0_20px_40px_-10px_rgba(255,255,255,0.1)] group"
+                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-white text-slate-900 hover:bg-slate-50 transition-all active:scale-[0.98] rounded-2xl shadow-[0_20px_40px_-10px_rgba(0,0,0,0.05)] border border-slate-200 group"
                 >
                   <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-5 h-5 group-hover:scale-110 transition-transform" alt="Google" />
                   Tiếp tục qua Google
                 </button>
 
                 <div className="flex items-center gap-4 py-2">
-                  <div className="h-[1px] flex-1 bg-white/5" />
-                  <span className="text-white/10 text-[9px] font-black uppercase tracking-widest">Phương thức truyền thống</span>
-                  <div className="h-[1px] flex-1 bg-white/5" />
+                  <div className="h-[1px] flex-1 bg-slate-200" />
+                  <span className="text-slate-400 text-[9px] font-black uppercase tracking-widest">Phương thức truyền thống</span>
+                  <div className="h-[1px] flex-1 bg-slate-200" />
                 </div>
 
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] ml-1">Định danh tài khoản</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Định danh tài khoản</label>
                     <input 
                       type="text"
                       placeholder="Username"
                       value={usernameInput}
                       onChange={(e) => setUsernameInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                      className="w-full px-6 py-4 bg-white/[0.03] border border-white/10 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-slate-500/30 focus:bg-white/[0.05] focus:border-slate-500/50 transition-all placeholder:text-white/5"
+                      className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-white/30 uppercase tracking-[0.2em] ml-1">Mã xác thực bảo mật</label>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">Mã xác thực bảo mật</label>
                     <input 
                       type="password"
                       placeholder="Password"
                       value={passwordInput}
                       onChange={(e) => setPasswordInput(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                      className="w-full px-6 py-4 bg-white/[0.03] border border-white/10 rounded-2xl text-white font-bold outline-none focus:ring-2 focus:ring-slate-500/30 focus:bg-white/[0.05] focus:border-slate-500/50 transition-all placeholder:text-white/5"
+                      className="w-full px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-2 focus:ring-slate-200 focus:bg-white focus:border-slate-400 transition-all placeholder:text-slate-300"
                     />
                   </div>
                 </div>
@@ -2392,7 +2392,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 <button 
                   onClick={handleLogin}
                   disabled={isAuthenticating}
-                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-800/10 text-slate-300 border border-slate-700/50 hover:bg-slate-800 hover:text-white transition-all active:scale-[0.98] rounded-2xl"
+                  className="w-full py-5 flex items-center justify-center gap-3 text-[11px] tracking-[0.2em] uppercase font-black bg-slate-900 text-white hover:bg-slate-800 transition-all active:scale-[0.98] rounded-2xl shadow-xl shadow-slate-200"
                 >
                   {isAuthenticating ? (
                     <RefreshCw className="w-5 h-5 animate-spin" />
@@ -2408,7 +2408,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
         {/* Footer info */}
         <div className="absolute inset-x-0 bottom-8 flex justify-center items-center">
-          <p className="text-[9px] font-black text-white/10 uppercase tracking-[0.5em]">Tài sản thuộc Bana BrewHouse • Bảo mật mức 4 • Tin Tin OS</p>
+          <p className="text-[9px] font-black text-slate-300 uppercase tracking-[0.5em]">Tài sản thuộc Bana BrewHouse • Bảo mật mức 4 • Tin Tin OS</p>
         </div>
       </div>
     );
