@@ -2318,9 +2318,12 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
               <div className="space-y-6">
                 <button 
                   onClick={async () => {
+                    if (isAuthenticating) return;
                     setIsAuthenticating(true);
+                    
                     try {
                       const result = await signInWithPopup(auth, googleProvider);
+                      
                       if (result.user) {
                         const email = result.user.email?.toLowerCase();
                         if (email === "khoa.huynh.06.12.2000@gmail.com") {
@@ -2345,8 +2348,15 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                         showNotification("Đăng nhập Google thành công!");
                       }
                     } catch (error: any) {
-                      console.error("Google login error:", error);
-                      alert("Đăng nhập Google thất bại ạ.");
+                      if (error.code === 'auth/cancelled-popup-request' || error.code === 'auth/popup-closed-by-user') {
+                        // Silent fail for user-initiated cancellations
+                        console.log("Auth cancelled by user.");
+                      } else if (error.code === 'auth/popup-blocked') {
+                        alert("🔴 Trình duyệt đã chặn cửa sổ đăng nhập.\n\nVui lòng nhấn vào biểu tượng 'Pop-up blocked' trên thanh địa chỉ và chọn 'Always allow pop-ups' để tiếp tục nhé!");
+                      } else {
+                        console.error("Google login error:", error);
+                        alert("Đăng nhập Google thất bại: " + error.message);
+                      }
                     } finally {
                       setIsAuthenticating(false);
                     }
