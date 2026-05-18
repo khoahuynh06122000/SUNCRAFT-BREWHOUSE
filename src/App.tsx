@@ -410,6 +410,7 @@ export default function App() {
   const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
   const [showPasswordInModal, setShowPasswordInModal] = useState(false);
   const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [currentPasswordInput, setCurrentPasswordInput] = useState('');
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
   const [newPinInputModal, setNewPinInputModal] = useState('');
   const [isUpdatingPin, setIsUpdatingPin] = useState(false);
@@ -2710,41 +2711,66 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   {/* Change Password & PIN Section */}
                   <div className="space-y-6 pt-2">
                     <div className="space-y-4">
-                      <div className="space-y-1.5 focus-within:translate-x-1 transition-transform">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Đổi mật khẩu mới</label>
-                        <div className="relative flex gap-2">
+                      <div className="space-y-3 focus-within:translate-x-1 transition-transform bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Xác thực mật khẩu cũ</label>
                           <input 
                             type="password"
-                            placeholder="Mật khẩu bảo vệ..."
-                            value={newPasswordInput}
-                            onChange={(e) => setNewPasswordInput(e.target.value)}
-                            className="flex-1 px-6 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary focus:bg-white transition-all placeholder:text-slate-300"
+                            placeholder="Mật khẩu hiện tại..."
+                            value={currentPasswordInput}
+                            onChange={(e) => setCurrentPasswordInput(e.target.value)}
+                            className="w-full px-6 py-4 bg-white border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary transition-all placeholder:text-slate-300"
                           />
-                          <button 
-                            onClick={async () => {
-                              if (!newPasswordInput || newPasswordInput.length < 4) {
-                                alert("Mật khẩu mới phải có ít nhất 4 ký tự ạ!");
-                                return;
-                              }
-                              setIsUpdatingPassword(true);
-                              try {
-                                await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
-                                  password: newPasswordInput,
-                                  updatedAt: new Date().toISOString()
-                                });
-                                showNotification("Đã cập nhật mật khẩu mới thành công!");
-                                setNewPasswordInput('');
-                              } catch (error: any) {
-                                handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
-                              } finally {
-                                setIsUpdatingPassword(false);
-                              }
-                            }}
-                            disabled={isUpdatingPassword || !newPasswordInput}
-                            className="px-6 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-50 transition-all shadow-lg shadow-slate-200"
-                          >
-                            {isUpdatingPassword ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Lưu"}
-                          </button>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] ml-1">Mật khẩu mới</label>
+                          <div className="relative flex gap-2">
+                            <input 
+                              type="password"
+                              placeholder="Mật khẩu mới..."
+                              value={newPasswordInput}
+                              onChange={(e) => setNewPasswordInput(e.target.value)}
+                              className="flex-1 px-6 py-4 bg-white border border-slate-200 rounded-2xl text-slate-900 font-bold outline-none focus:ring-4 focus:ring-primary/5 focus:border-primary transition-all placeholder:text-slate-300"
+                            />
+                            <button 
+                              onClick={async () => {
+                                if (!currentPasswordInput) {
+                                  alert("Vui lòng nhập mật khẩu hiện tại để xác thực ạ!");
+                                  return;
+                                }
+
+                                if (currentPasswordInput !== currentUserConfig?.password) {
+                                  alert("Mật khẩu hiện tại không chính xác ạ!");
+                                  return;
+                                }
+
+                                if (!newPasswordInput || newPasswordInput.length < 4) {
+                                  alert("Mật khẩu mới phải có ít nhất 4 ký tự ạ!");
+                                  return;
+                                }
+
+                                setIsUpdatingPassword(true);
+                                try {
+                                  await updateDoc(doc(db, 'user_configs', currentUserConfig.username), {
+                                    password: newPasswordInput,
+                                    updatedAt: new Date().toISOString()
+                                  });
+                                  showNotification("Đã cập nhật mật khẩu mới thành công!");
+                                  setNewPasswordInput('');
+                                  setCurrentPasswordInput('');
+                                } catch (error: any) {
+                                  handleFirestoreError(error, OperationType.UPDATE, 'user_configs');
+                                } finally {
+                                  setIsUpdatingPassword(false);
+                                }
+                              }}
+                              disabled={isUpdatingPassword || !newPasswordInput || !currentPasswordInput}
+                              className="px-6 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-slate-800 disabled:opacity-50 transition-all shadow-lg shadow-slate-200"
+                            >
+                              {isUpdatingPassword ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Lưu"}
+                            </button>
+                          </div>
                         </div>
                       </div>
 
