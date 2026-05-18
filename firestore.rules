@@ -23,9 +23,10 @@ service cloud.firestore {
       return request.auth.token.get('email', '').lower();
     }
 
-    // Fetch user role from user_configs collection
+    // Fetch user role safely from user_configs collection
     function getUserRole() {
-      return get(/databases/$(database)/documents/user_configs/$(getEmail())).data.role;
+      // Sử dụng get().data.get() để tránh lỗi nếu tài liệu không tồn tại
+      return isSignedIn() ? get(/databases/$(database)/documents/user_configs/$(getEmail())).data.get('role', 'VIEWER') : 'GUEST';
     }
 
     function isOwner() {
@@ -76,8 +77,11 @@ service cloud.firestore {
     }
 
     // 4. User Configurations (Internal Security)
-    match /user_configs/{email} {
-      allow read: if isOwner() || (isSignedIn() && getEmail() == email.lower());
+    match /user_configs/{username} {
+      // Cho phép lấy thông tin cụ thể (get) để kiểm tra đăng nhập truyền thống
+      // Nhưng không cho phép liệt kê toàn bộ danh sách (list)
+      allow get: if true; 
+      allow list: if isOwner();
       allow write: if isOwner();
     }
   }
