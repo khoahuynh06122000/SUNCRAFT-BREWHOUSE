@@ -2892,6 +2892,11 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                 key={item.id}
                 onClick={() => {
                   setActiveTab(item.id);
+                  if (item.id === 'export') {
+                    setNewTransaction(prev => ({ ...prev, isInTransit: true }));
+                  } else if (item.id === 'import') {
+                    setNewTransaction(prev => ({ ...prev, isInTransit: false }));
+                  }
                   if (window.innerWidth < 1024) setSidebarOpen(false);
                 }}
                 className={cn(
@@ -4582,68 +4587,6 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                               </div>
                             )}
 
-                            <div className="space-y-3">
-                              <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng thực tế (Ảnh chụp nhận hàng)</label>
-                              
-                              {!lossEvidencePhoto ? (
-                                <div className="grid grid-cols-2 gap-4">
-                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-primary hover:bg-primary/5 transition-all cursor-pointer group">
-                                    <Camera className="w-8 h-8 text-slate-300 group-hover:text-primary transition-colors" />
-                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-primary tracking-tighter">Chụp ảnh</span>
-                                    <input 
-                                      type="file" 
-                                      className="hidden" 
-                                      accept="image/*" 
-                                      capture="environment"
-                                      onChange={(e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) {
-                                          const reader = new FileReader();
-                                          reader.onload = async () => {
-                                            const compressed = await compressImage(reader.result as string);
-                                            setLossEvidencePhoto(compressed);
-                                          };
-                                          reader.readAsDataURL(file);
-                                        }
-                                      }}
-                                    />
-                                  </label>
-                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-emerald-500 hover:bg-emerald-50 transition-all cursor-pointer group">
-                                    <ImageIcon className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
-                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-emerald-500 tracking-tighter">Chọn từ máy</span>
-                                    <input 
-                                      type="file" 
-                                      className="hidden" 
-                                      accept="image/*" 
-                                      onChange={(e) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) {
-                                          const reader = new FileReader();
-                                          reader.onload = async () => {
-                                            const compressed = await compressImage(reader.result as string);
-                                            setLossEvidencePhoto(compressed);
-                                          };
-                                          reader.readAsDataURL(file);
-                                        }
-                                      }}
-                                    />
-                                  </label>
-                                </div>
-                              ) : (
-                                <div className="relative rounded-2xl overflow-hidden group">
-                                  <img src={lossEvidencePhoto} alt="Evidence" className="w-full aspect-video object-cover" />
-                                  <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
-                                    <button 
-                                      onClick={() => setLossEvidencePhoto('')}
-                                      className="p-3 bg-rose-500 text-white rounded-full shadow-lg"
-                                    >
-                                      <Trash2 className="w-5 h-5" />
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-
                             {actualReceivedQty < selectedInTransit.quantity && (
                               <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl">
                                 <div className="flex items-center gap-2 text-rose-600 mb-1">
@@ -4898,23 +4841,20 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
                       {activeTab === 'export' && (
                         <div className="md:col-span-2">
-                          <label className="flex items-center gap-3 cursor-pointer p-5 bg-amber-50/50 border border-amber-200/50 rounded-2xl hover:bg-amber-100/50 transition-all">
-                            <input 
-                              type="checkbox" 
-                              className="w-5 h-5 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                              checked={newTransaction.isInTransit}
-                              onChange={(e) => setNewTransaction({ ...newTransaction, isInTransit: e.target.checked })}
-                            />
+                          <div className="p-5 bg-amber-50/50 border border-amber-200/50 rounded-2xl flex items-center gap-4">
+                            <Truck className="w-8 h-8 text-amber-500" />
                             <div className="flex flex-col">
-                              <span className="text-xs font-black text-amber-900 uppercase tracking-widest">Đơn hàng đi đường (Giao sau)</span>
-                              <span className="text-[10px] text-amber-700/70 font-bold">Hàng đang vận chuyển, chưa đến tay đối tác ngay.</span>
+                              <span className="text-xs font-black text-amber-900 uppercase tracking-widest">Mặc định: Đơn hàng đi đường (Giao sau)</span>
+                              <span className="text-[10px] text-amber-700/70 font-bold italic">Tất cả đơn xuất kho sẽ được lưu vào mục "Đơn đi đường" để xác nhận khi hoàn tất.</span>
                             </div>
-                            <Truck className="w-6 h-6 text-amber-500 ml-auto" />
-                          </label>
+                            <div className="ml-auto flex items-center gap-2 px-3 py-1 bg-amber-500 text-white rounded-full text-[8px] font-black uppercase">
+                              Active
+                            </div>
+                          </div>
                         </div>
                       )}
 
-                      {(activeTab === 'import' || !newTransaction.isInTransit) && (
+                      {activeTab === 'import' && (
                         <div className="md:col-span-2 space-y-4">
                           <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng (Ảnh chụp chứng từ cho cả đơn)</label>
                           <div className="flex flex-col gap-4">
