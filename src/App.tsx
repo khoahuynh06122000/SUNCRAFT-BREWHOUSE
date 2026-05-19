@@ -832,9 +832,10 @@ export default function App() {
       sheetName = "Tong_Hop_Kho";
     } else {
       const typeLabel = reportSubTab === 'in' ? 'Nhap' : 'Xuat';
-      const targets = filteredTransactionsForReport.filter(t => 
-        reportSubTab === 'in' ? (t.type === 'IN' || t.type === 'OPENING') : t.type === 'OUT'
-      );
+      const targets = filteredTransactionsForReport.filter(t => {
+        if (reportSubTab === 'in') return t.type === 'IN' || t.type === 'OPENING';
+        return t.type === 'OUT' && t.status !== 'in_transit';
+      });
 
       if (targets.length === 0) {
         showNotification(`Không có dữ liệu ${typeLabel} để xuất.`, 'error');
@@ -1377,11 +1378,51 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     }));
   };
 
-  const [selectedInTransit, setSelectedInTransit] = useState<Transaction | null>(null);
-  const [actualReceivedQty, setActualReceivedQty] = useState<number>(0);
+  const [selectedInTransitGroup, setSelectedInTransitGroup] = useState<Transaction[] | null>(null);
+  const [actualReceivedQtyMap, setActualReceivedQtyMap] = useState<Record<string, number>>({});
   const [lossReason, setLossReason] = useState<string>('');
-  const [lossEvidencePhoto, setLossEvidencePhoto] = useState<string>('');
+  const [confirmationPhoto, setConfirmationPhoto] = useState<string>('');
   const [showLossModal, setShowLossModal] = useState(false);
+
+  const getSheetNumber = (t: Transaction) => {
+    if (!t.referenceGroupId) return 'Lẻ';
+    const id = t.referenceGroupId.replace('multi-', '');
+    // If it's a timestamp, we might want to map it to a simpler number, 
+    // but the user wants it to start from 1. 
+    // Usually, this implies a counter in DB or based on index.
+    // For now, I'll clean the display of the ID.
+    return id;
+  };
+
+  const inTransitGroups = useMemo(() => {
+    const groups: Record<string, Transaction[]> = {};
+    const sortedAll = [...transactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    
+    // Determine the sequence for ALL groups ever created to keep numbers consistent
+    const groupSequence: Record<string, number> = {};
+    let counter = 0;
+    sortedAll.forEach(t => {
+      if (t.referenceGroupId && !groupSequence[t.referenceGroupId]) {
+        counter++;
+        groupSequence[t.referenceGroupId] = counter;
+      }
+    });
+
+    transactions.filter(t => t.status === 'in_transit').forEach(t => {
+      const key = t.referenceGroupId || t.id;
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
+    });
+
+    // Sort groups by date descending for UI
+    return Object.entries(groups)
+      .map(([id, group]) => ({
+        id,
+        group,
+        sheetNumber: groupSequence[id] || 'Lẻ'
+      }))
+      .sort((a, b) => new Date(b.group[0].date).getTime() - new Date(a.group[0].date).getTime());
+  }, [transactions]);
 
   const [showAddPartner, setShowAddPartner] = useState(false);
   const [partnerFormData, setPartnerFormData] = useState<Omit<Partner, 'id'>>({
@@ -1411,54 +1452,64 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
   };
 
   const handleReportLoss = async () => {
-    if (!selectedInTransit || actualReceivedQty < 0) return;
+    if (!selectedInTransitGroup || selectedInTransitGroup.length === 0) return;
     
     try {
       setLoading(true);
-      const diff = selectedInTransit.quantity - actualReceivedQty;
-      
-      if (diff > 0) {
-        // Create loss transaction
-        const lossId = `loss-${Date.now()}`;
-        const lossTrx: Transaction = {
-          ...selectedInTransit,
-          id: lossId,
-          type: 'LOSS',
-          quantity: diff,
-          notes: `[HAO HỤT TỪ ĐƠN ${selectedInTransit.id}] Lý do: ${lossReason}`,
-          status: 'completed',
-          date: new Date().toISOString(),
-          evidencePhotoUrl: lossEvidencePhoto || null
-        };
-        await setDoc(doc(db, 'transactions', lossId), lossTrx);
+      const batch = writeBatch(db);
+      const now = new Date().toISOString();
 
-        // Update original transaction
-        await updateDoc(doc(db, 'transactions', selectedInTransit.id), {
-          quantity: actualReceivedQty,
-          status: 'completed',
-          notes: `${selectedInTransit.notes || ''} (Đã điều chỉnh từ ${selectedInTransit.quantity} do hao hụt)`.trim(),
-          updatedAt: new Date().toISOString(),
-          evidencePhotoUrl: lossEvidencePhoto || selectedInTransit.evidencePhotoUrl
-        });
-      } else {
-        // Just confirm with possible new photo
-        await updateDoc(doc(db, 'transactions', selectedInTransit.id), {
-          status: 'completed',
-          updatedAt: new Date().toISOString(),
-          evidencePhotoUrl: lossEvidencePhoto || selectedInTransit.evidencePhotoUrl,
-          notes: `${selectedInTransit.notes || ''} (Đã xác nhận nhận đủ)`.trim()
-        });
+      for (const trx of selectedInTransitGroup) {
+        const actualQty = actualReceivedQtyMap[trx.id];
+        if (actualQty === undefined || actualQty < 0) continue;
+
+        const diff = trx.quantity - actualQty;
+        
+        if (diff > 0) {
+          // Create loss transaction
+          const lossId = `loss-${Date.now()}-${trx.id}`;
+          const lossTrx: Transaction = {
+            ...trx,
+            id: lossId,
+            type: 'LOSS',
+            quantity: diff,
+            notes: `[HAO HỤT TỪ ĐƠN ${trx.id}] Lý do: ${lossReason}`,
+            status: 'completed',
+            date: now,
+            evidencePhotoUrl: confirmationPhoto
+          };
+          batch.set(doc(db, 'transactions', lossId), lossTrx);
+
+          // Update original transaction
+          batch.update(doc(db, 'transactions', trx.id), {
+            quantity: actualQty,
+            status: 'completed',
+            notes: `${trx.notes || ''} (Đã điều chỉnh từ ${trx.quantity} do hao hụt)`.trim(),
+            updatedAt: now,
+            evidencePhotoUrl: confirmationPhoto
+          });
+        } else {
+          // Just confirm
+          batch.update(doc(db, 'transactions', trx.id), {
+            status: 'completed',
+            updatedAt: now,
+            notes: `${trx.notes || ''} (Đã xác nhận nhận đủ)`.trim(),
+            evidencePhotoUrl: confirmationPhoto
+          });
+        }
       }
 
+      await batch.commit();
+
       setShowLossModal(false);
-      setSelectedInTransit(null);
-      setActualReceivedQty(0);
+      setSelectedInTransitGroup(null);
+      setActualReceivedQtyMap({});
       setLossReason('');
-      setLossEvidencePhoto('');
-      showNotification('Hệ thống cập nhật data thành công');
+      setConfirmationPhoto('');
+      showNotification('Hệ thống đã xác nhận hoàn tất cả phiếu thành công!');
     } catch (err) {
       console.error("Lỗi hoàn tất đơn đi đường:", err);
-      handleFirestoreError(err, OperationType.WRITE, selectedInTransit ? `transactions/${selectedInTransit.id}` : 'transactions');
+      handleFirestoreError(err, OperationType.WRITE, 'transactions_batch');
       showNotification('Không thể hoàn tất đơn hàng. Anh kiểm tra lại kết nối mạng nhé!', 'error');
     } finally {
       setLoading(false);
@@ -1853,7 +1904,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     if (allMatches.length === 0) return null;
 
     const imports = allMatches.filter(t => t.type === 'IN' || t.type === 'OPENING');
-    const exports = allMatches.filter(t => t.type === 'OUT');
+    const exports = allMatches.filter(t => t.type === 'OUT' && t.status !== 'in_transit');
     
     const totalIn = imports.reduce((sum, t) => sum + t.quantity, 0);
     const totalOut = exports.reduce((sum, t) => sum + t.quantity, 0);
@@ -2014,9 +2065,9 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       category: string;
     }>();
 
-    // 1. Calculate physical exports
+    // 1. Calculate physical exports (Only completed ones)
     filteredTransactionsByTime.forEach(t => {
-      if (t.type === 'OUT') {
+      if (t.type === 'OUT' && t.status !== 'in_transit') {
         const product = products.find(p => p.id === t.productId);
         const entry = dataMap.get(t.productId) || {
           productId: t.productId,
@@ -2072,7 +2123,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       if (t.type === 'IN') {
         totalIn += t.quantity;
       } else if (
-        (t.type === 'OUT' && (t.status === 'completed' || !t.status)) || 
+        (t.type === 'OUT' && t.status !== 'in_transit') || 
         t.type === 'LOSS' || 
         t.type === 'DAMAGE'
       ) {
@@ -2147,7 +2198,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     filteredTransactionsByTime.forEach(t => {
       if (results[t.category]) {
         if (t.type === 'IN') results[t.category].Nhập += t.quantity;
-        else if (t.type === 'OUT') results[t.category].Xuất += t.quantity;
+        else if (t.type === 'OUT' && t.status !== 'in_transit') results[t.category].Xuất += t.quantity;
       }
     });
 
@@ -4488,41 +4539,54 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100">
-                          {transactions.filter(t => t.status === 'in_transit').length > 0 ? (
-                            transactions.filter(t => t.status === 'in_transit').map((t) => (
-                              <tr key={t.id} className="hover:bg-amber-50/30 transition-all group">
-                                <td className="py-4 px-6 text-[11px] font-mono font-bold text-slate-500">
-                                  {formatDate(t.date)}
-                                </td>
-                                <td className="py-4 px-6">
-                                  <div className="font-bold text-slate-900 text-sm leading-tight">{t.productName}</div>
-                                  <div className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-1">LOT: {t.batchNumber || 'N/A'}</div>
-                                </td>
-                                <td className="py-4 px-6">
-                                  <span className="px-2 py-0.5 bg-white border border-slate-200 rounded-full text-[10px] font-black uppercase tracking-tighter text-slate-700">
-                                    {t.partnerName}
-                                  </span>
-                                </td>
-                                <td className="py-4 px-6 text-right font-mono font-black text-sm text-amber-600">
-                                  {formatNumber(t.quantity)}
-                                </td>
-                                <td className="py-4 px-6">
-                                  <div className="flex items-center justify-center gap-2">
-                                    <button 
-                                      onClick={() => {
-                                        setSelectedInTransit(t);
-                                        setActualReceivedQty(t.quantity);
-                                        setShowLossModal(true);
-                                      }}
-                                      className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
-                                    >
-                                      <CheckCircle className="w-3.5 h-3.5" />
-                                      Xác nhận đã giao
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            ))
+                          {inTransitGroups.length > 0 ? (
+                            inTransitGroups.map(({ id, group, sheetNumber }) => {
+                              const firstTrx = group[0];
+                              const totalQty = group.reduce((sum, t) => sum + t.quantity, 0);
+                              const partnerName = firstTrx.partnerName;
+                              const date = firstTrx.date;
+                              
+                              return (
+                                <tr key={id} className="hover:bg-amber-50/30 transition-all group">
+                                  <td className="py-4 px-6 text-[11px] font-mono font-bold text-slate-500">
+                                    {formatDate(date)}
+                                  </td>
+                                  <td className="py-4 px-6">
+                                    <div className="font-bold text-slate-900 text-sm leading-tight">
+                                      Phiếu số: {sheetNumber}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter mt-1">
+                                      {group.length} mặt hàng khác nhau
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6">
+                                    <span className="px-2 py-0.5 bg-white border border-slate-200 rounded-full text-[10px] font-black uppercase tracking-tighter text-slate-700">
+                                      {partnerName}
+                                    </span>
+                                  </td>
+                                  <td className="py-4 px-6 text-right font-mono font-black text-sm text-amber-600">
+                                    {formatNumber(totalQty)}
+                                  </td>
+                                  <td className="py-4 px-6">
+                                    <div className="flex items-center justify-center gap-2">
+                                      <button 
+                                        onClick={() => {
+                                          setSelectedInTransitGroup(group);
+                                          const qtyMap: Record<string, number> = {};
+                                          group.forEach(t => qtyMap[t.id] = t.quantity);
+                                          setActualReceivedQtyMap(qtyMap);
+                                          setShowLossModal(true);
+                                        }}
+                                        className="px-3 py-1.5 bg-emerald-500 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all flex items-center gap-1.5 shadow-lg shadow-emerald-500/20"
+                                      >
+                                        <CheckCircle className="w-3.5 h-3.5" />
+                                        Xác nhận cả phiếu
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })
                           ) : (
                             <tr>
                               <td colSpan={5} className="py-20 text-center text-slate-300 font-bold uppercase tracking-[0.2em] text-xs">Không có đơn hàng nào đang đi đường.</td>
@@ -4534,85 +4598,166 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   </Card>
 
                   {/* Loss Reporting Modal */}
-                    {showLossModal && selectedInTransit && (
+                    {showLossModal && selectedInTransitGroup && selectedInTransitGroup.length > 0 && (
                       <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
                         <div 
                           onClick={() => setShowLossModal(false)}
                           className="absolute inset-0 bg-slate-900/60 backdrop-blur-md"
                         />
                         <div 
-                          className="relative w-full max-w-lg bg-white rounded-[32px] shadow-2xl overflow-hidden p-8"
+                          className="relative w-full max-w-2xl bg-white rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
                         >
-                          <div className="flex items-center justify-between mb-8">
-                            <div>
-                              <h3 className="text-xl font-black text-slate-900 uppercase">XÁC NHẬN ĐÃ GIAO & HOÀN TẤT ĐƠN</h3>
-                              <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Đơn hàng: {selectedInTransit.id}</p>
+                          <div className="p-8 pb-4 border-b border-slate-100">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <h3 className="text-xl font-black text-slate-900 uppercase">XÁC NHẬN CẢ PHIẾU GIAO HÀNG</h3>
+                                <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">
+                                  Mã phiếu hệ thống: {selectedInTransitGroup[0].referenceGroupId?.replace('multi-', '') || 'Cá lẻ'}
+                                </p>
+                              </div>
+                              <button onClick={() => {
+                                setShowLossModal(false);
+                                setConfirmationPhoto('');
+                              }} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+                                <X className="w-5 h-5 text-slate-400" />
+                              </button>
                             </div>
-                            <button onClick={() => {
-                              setShowLossModal(false);
-                              setLossEvidencePhoto('');
-                            }} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-                              <X className="w-5 h-5 text-slate-400" />
-                            </button>
                           </div>
 
-                          <div className="space-y-6">
-                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-slate-400 font-bold">Sản phẩm:</span>
-                                  <span className="text-slate-900 font-black">{selectedInTransit.productName}</span>
-                                </div>
-                                <div className="flex justify-between text-xs">
-                                  <span className="text-slate-400 font-bold">Số lượng gửi:</span>
-                                  <span className="text-amber-600 font-black">{formatNumber(selectedInTransit.quantity)}</span>
-                                </div>
+                          <div className="p-8 pt-4 space-y-6 overflow-y-auto">
+                            <div className="space-y-4">
+                              <h4 className="text-[11px] font-black text-slate-500 uppercase tracking-widest ml-1">Chi tiết hàng hóa ({selectedInTransitGroup.length})</h4>
+                              <div className="space-y-3">
+                                {selectedInTransitGroup.map((trx) => (
+                                  <div key={trx.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                    <div className="flex justify-between items-start mb-3">
+                                      <div>
+                                        <div className="text-sm font-black text-slate-900">{trx.productName}</div>
+                                        <div className="text-[10px] text-slate-400 font-bold uppercase">Lô: {trx.batchNumber || 'N/A'} - SL Gửi: {formatNumber(trx.quantity)}</div>
+                                      </div>
+                                      <div className="text-right">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase">Thực nhận</span>
+                                      </div>
+                                    </div>
+                                    <input 
+                                      type="number"
+                                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none"
+                                      value={actualReceivedQtyMap[trx.id] || 0}
+                                      onChange={(e) => setActualReceivedQtyMap({
+                                        ...actualReceivedQtyMap,
+                                        [trx.id]: Number(e.target.value)
+                                      })}
+                                    />
+                                    { (actualReceivedQtyMap[trx.id] || 0) < trx.quantity && (
+                                      <div className="mt-2 flex items-center gap-1.5 text-rose-500 text-[10px] font-bold italic">
+                                        <AlertTriangle className="w-3 h-3" />
+                                        Hụt mất: {formatNumber(trx.quantity - (actualReceivedQtyMap[trx.id] || 0))} đơn vị
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
                             </div>
 
-                            <Input 
-                              label="Số lượng thực nhận (Hàng lành lặn)"
-                              type="number"
-                              value={actualReceivedQty}
-                              onChange={(e: any) => setActualReceivedQty(Number(e.target.value))}
-                            />
-
-                            {actualReceivedQty < selectedInTransit.quantity && (
-                              <div className="space-y-2">
-                                <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Lý do hao hụt / Hư hại</label>
+                            {Object.entries(actualReceivedQtyMap).some(([id, qty]) => {
+                              const trx = selectedInTransitGroup.find(t => t.id === id);
+                              return trx && qty < trx.quantity;
+                            }) && (
+                              <div className="space-y-3">
+                                <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Lý do hao hụt (Bắt buộc nếu có chênh lệch)</label>
                                 <textarea 
-                                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-primary/5 focus:border-primary outline-none text-sm font-medium min-h-[100px]"
+                                  className="w-full p-4 bg-slate-50 border border-slate-100 rounded-2xl focus:ring-4 focus:ring-primary/5 focus:border-primary outline-none text-sm font-medium min-h-[80px]"
                                   placeholder="Ví dụ: Nổ lon do va đập, thiếu hàng khi kiểm đếm..."
                                   value={lossReason}
                                   onChange={(e) => setLossReason(e.target.value)}
                                 />
-                              </div>
-                            )}
-
-                            {actualReceivedQty < selectedInTransit.quantity && (
-                              <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl">
-                                <div className="flex items-center gap-2 text-rose-600 mb-1">
-                                  <AlertCircle className="w-4 h-4" />
-                                  <span className="text-[10px] font-black uppercase tracking-widest">Cảnh báo chênh lệch</span>
+                                <div className="bg-rose-50 border border-rose-100 p-4 rounded-xl">
+                                  <div className="flex items-center gap-2 text-rose-600 mb-1">
+                                    <AlertCircle className="w-4 h-4" />
+                                    <span className="text-[10px] font-black uppercase tracking-widest">Cảnh báo chênh lệch</span>
+                                  </div>
+                                  <p className="text-xs text-rose-500 font-bold italic">
+                                    Hệ thống sẽ tự động ghi nhận phần chênh lệch vào mục HAO HỤT.
+                                  </p>
                                 </div>
-                                <p className="text-xs text-rose-500 font-bold italic">
-                                  Hệ thống sẽ tự động tách {formatNumber(selectedInTransit.quantity - actualReceivedQty)} đơn vị vào danh mục HAO HỤT/HƯ HỎNG.
-                                </p>
                               </div>
                             )}
 
-                            <div className="pt-4 flex gap-3">
-                              <Button variant="outline" className="flex-1" onClick={() => {
-                                setShowLossModal(false);
-                                setLossEvidencePhoto('');
-                              }}>Hủy</Button>
-                              <Button 
-                                className={`flex-[2] ${actualReceivedQty < selectedInTransit.quantity ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-500 hover:bg-emerald-600'}`} 
-                                onClick={handleReportLoss}
-                                loading={loading}
-                                disabled={loading}
-                              >
-                                {actualReceivedQty < selectedInTransit.quantity ? 'Xác nhận điều chỉnh' : 'Hoàn thành ghi nhận'}
-                              </Button>
+                            <div className="space-y-3">
+                              <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-widest ml-1">Minh chứng thực tế (Ảnh chụp/Tải lên - Bắt buộc)</label>
+                              
+                              {!confirmationPhoto ? (
+                                <div className="grid grid-cols-2 gap-4">
+                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-primary hover:bg-primary/5 transition-all cursor-pointer group">
+                                    <Camera className="w-8 h-8 text-slate-300 group-hover:text-primary transition-colors" />
+                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-primary tracking-tighter">Chụp ảnh</span>
+                                    <input 
+                                      type="file" 
+                                      className="hidden" 
+                                      accept="image/*" 
+                                      capture="environment"
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onload = async () => {
+                                            const compressed = await compressImage(reader.result as string);
+                                            setConfirmationPhoto(compressed);
+                                          };
+                                          reader.readAsDataURL(file);
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                  <label className="flex flex-col items-center justify-center gap-3 p-8 border-2 border-dashed border-slate-200 rounded-3xl hover:border-emerald-500 hover:bg-emerald-50 transition-all cursor-pointer group">
+                                    <ImageIcon className="w-8 h-8 text-slate-300 group-hover:text-emerald-500 transition-colors" />
+                                    <span className="text-[11px] font-black text-slate-400 uppercase group-hover:text-emerald-500 tracking-tighter">Chọn từ máy</span>
+                                    <input 
+                                      type="file" 
+                                      className="hidden" 
+                                      accept="image/*" 
+                                      onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const reader = new FileReader();
+                                          reader.onload = async () => {
+                                            const compressed = await compressImage(reader.result as string);
+                                            setConfirmationPhoto(compressed);
+                                          };
+                                          reader.readAsDataURL(file);
+                                        }
+                                      }}
+                                    />
+                                  </label>
+                                </div>
+                              ) : (
+                                <div className="relative rounded-2xl overflow-hidden group">
+                                  <img src={confirmationPhoto} alt="Evidence" className="w-full aspect-video object-cover" />
+                                  <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-all flex items-center justify-center">
+                                    <button 
+                                      onClick={() => setConfirmationPhoto('')}
+                                      className="p-3 bg-rose-500 text-white rounded-full shadow-lg"
+                                    >
+                                      <Trash2 className="w-5 h-5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
+                          </div>
+
+                          <div className="p-8 pt-4 border-t border-slate-100 bg-slate-50/30 flex gap-3">
+                            <Button variant="outline" className="flex-1" onClick={() => {
+                              setShowLossModal(false);
+                            }}>Hủy</Button>
+                            <Button 
+                              className="flex-[2] bg-emerald-500 hover:bg-emerald-600" 
+                              onClick={handleReportLoss}
+                              loading={loading}
+                              disabled={loading || !confirmationPhoto}
+                            >
+                              {!confirmationPhoto ? 'Cần ảnh minh chứng' : 'XÁC NHẬN HOÀN TẤT PHIẾU'}
+                            </Button>
                           </div>
                         </div>
                       </div>
