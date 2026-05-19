@@ -10,7 +10,7 @@ export const INITIAL_PRODUCTS: Product[] = [
   { id: 'p12', name: 'Bia Eclipse Plaza Dry Hop Wheat', category: 'Lít', unit: 'Lít', price: 54000, conversionFactor: 1, capacityPerUnit: 1000 },
   { id: 'p14', name: 'Bia Golden Zest', category: 'Lít', unit: 'Lít', price: 47000, conversionFactor: 1, capacityPerUnit: 1000 },
   { id: 'p15', name: 'Bia Lunar Castle Dry hop Pale Ale', category: 'Lít', unit: 'Lít', price: 55000, conversionFactor: 1, capacityPerUnit: 1000 },
-  { id: 'p16', name: 'Bia Rosa Garden Light Lager', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
+  { id: 'p16', name: 'Bia Time Gate Light Lager', category: 'Lít', unit: 'Lít', price: 45000, conversionFactor: 1, capacityPerUnit: 1000 },
   { id: 'p17', name: 'Bia Lunar Castle Dry hop Pale Ale 330ml', category: 'Lon', unit: 'Lon', price: 17500, conversionFactor: 1, capacityPerUnit: 330 },
 ];
 

@@ -2372,29 +2372,29 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
     }
   }, [user, activeTab, navItems]);
 
-  if (loading && !user) {
+   if (loading && !user) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6 relative overflow-hidden">
         {/* Superior Background Architecture */}
         <div className="absolute inset-0 z-0">
           <img 
             src="https://images.unsplash.com/photo-1554469384-e58fac16e23a?q=80&w=2574&auto=format&fit=crop" 
-            className="w-full h-full object-cover opacity-30 scale-110 blur-[3px]"
+            className="w-full h-full object-cover opacity-20 scale-100"
             alt="Background"
           />
-          <div className="absolute inset-0 bg-gradient-to-tr from-slate-100/80 via-white/40 to-slate-100/80 opacity-90" />
+          <div className="absolute inset-0 bg-gradient-to-tr from-slate-100/60 via-white/40 to-slate-100/60" />
         </div>
         
-        <div className="flex flex-col items-center gap-12 relative z-10">
+        <div className="flex flex-col items-center gap-8 relative z-10 transition-all duration-300">
           <div className="relative">
-            <div className="w-24 h-24 border-4 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+            <div className="w-16 h-16 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <Beer className="w-8 h-8 text-slate-400 animate-pulse" />
+              <Beer className="w-6 h-6 text-slate-400" />
             </div>
           </div>
-          <div className="text-center space-y-4">
-            <h1 className="text-4xl font-black text-slate-900 tracking-widest font-serif italic uppercase">Bia Bà Nà</h1>
-            <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.5em] animate-pulse">Đang kết nối hệ thống dữ liệu...</p>
+          <div className="text-center space-y-2">
+            <h1 className="text-3xl font-black text-slate-900 tracking-widest font-serif italic uppercase">Bia Bà Nà</h1>
+            <p className="text-slate-400 text-[9px] font-black uppercase tracking-[0.4em]">Đang tải dữ liệu...</p>
           </div>
         </div>
       </div>
@@ -2461,7 +2461,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
             <div className="space-y-8">
               {showPinEntry ? (
-                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-200">
                   <div className="flex items-center gap-3 mb-2">
                     <button 
                       onClick={() => {
@@ -2625,8 +2625,8 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
 
   return (
     <div className={cn(
-      "flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden transition-all duration-300",
-      (loading || isAccountModalOpen) && user ? "blur-[2px] pointer-events-none select-none brightness-95" : ""
+      "flex h-screen bg-bg-main text-slate-900 font-sans overflow-hidden transition-all duration-150",
+      (loading || isAccountModalOpen) && user ? "blur-[1px] brightness-95" : ""
     )}>
       {/* Account Profile Modal */}
         {isAccountModalOpen && currentUserConfig && (
@@ -2868,7 +2868,7 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
       {/* Sidebar */}
       <aside 
         className={cn(
-          "fixed inset-y-0 left-0 z-50 w-64 sm:w-72 bg-white border-r border-slate-100 transition-all duration-300 transform lg:relative lg:translate-x-0 overflow-hidden shrink-0 flex flex-col premium-shadow",
+          "fixed inset-y-0 left-0 z-50 w-64 sm:w-72 bg-white border-r border-slate-100 transition-all duration-200 transform lg:relative lg:translate-x-0 overflow-hidden shrink-0 flex flex-col premium-shadow",
           sidebarOpen ? "translate-x-0" : "-translate-x-full lg:w-0 lg:opacity-0 lg:border-none"
         )}
       >
@@ -2895,14 +2895,14 @@ const compressImage = (base64Str: string, maxWidth = 1024, maxHeight = 1024, qua
                   if (window.innerWidth < 1024) setSidebarOpen(false);
                 }}
                 className={cn(
-                  "w-full flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5 sm:py-4.5 rounded-xl sm:rounded-2xl transition-all duration-300 group relative overflow-hidden",
+                  "w-full flex items-center gap-3 sm:gap-4 px-4 sm:px-5 py-3.5 sm:py-4.5 rounded-xl sm:rounded-2xl transition-all duration-200 group relative overflow-hidden",
                   activeTab === item.id 
                     ? "bg-slate-900 text-white shadow-2xl shadow-slate-200" 
                     : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
                 )}
               >
                 <item.icon 
-                  className={cn("w-5 h-5 sm:w-6 sm:h-6 transition-transform duration-300 group-hover:scale-110")} 
+                  className={cn("w-5 h-5 sm:w-6 sm:h-6 transition-transform duration-200 group-hover:scale-110")} 
                   style={{ color: activeTab === item.id ? '#ffffff' : item.color }}
                 />
                 <span className="text-xs sm:text-sm font-black uppercase tracking-widest">{item.label}</span>
